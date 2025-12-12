@@ -1,20 +1,23 @@
 # =========================
-# Kairos Core (PC+FCI + DoWhy + EconML + SCM)
+# Kairos Core (PC+FCI + DoWhy + EconML + SCM) — with Progress Indicators
 # =========================
-# Fixes included:
+# Key robustness + UX upgrades:
 # - NaN-safe discovery matrix (impute + OHE)
 # - causal-learn PC/FCI API + return-type variance (tuple-safe)
 # - prevents one-hot sibling edges from leaking into column-level graph
-# - suppresses causal-learn stdout (those "Age Range_* --> Age Range_*" prints)
+# - suppresses noisy causal-learn stdout (edges printed during discovery)
 # - DoWhy graph passed as nx.DiGraph (no DOT parsing issues)
-# - EconML uses W for confounders, X=None (no empty-feature crash)
-# - SCM uses numeric-only nodes (avoids DoWhy GCM classification/logloss failures)
-# - interventional_samples signature compatibility (requires observed_data in some versions)
-# - interventions passed as callables (float->lambda) for versions that require callables
+# - EconML uses W for confounders, X=None (avoids empty-feature crashes)
+# - SCM uses numeric-only nodes (avoids DoWhy GCM classification/logloss pitfalls)
+# - interventional_samples compatibility across DoWhy versions:
+#   * interventions as callables (float -> lambda)
+#   * avoids "observed_samples AND num_samples_to_draw" conflict by subsampling observed_data
+# - Progress prints + timings (flush=True) so execution feels responsive
 # =========================
 
 import sys
 import io
+import time
 import inspect
 import numpy as np
 import pandas as pd
@@ -41,6 +44,38 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
+
+
+# =========================
+# Progress / logging helpers
+# =========================
+
+def kprint(msg: str):
+    print(f"[Kairos] {msg}", flush=True)
+
+
+@contextmanager
+def stage(name: str):
+    kprint(f"▶ {name} ...")
+    t0 = time.time()
+    try:
+        yield
+        kprint(f"✔ {name} (done in {time.time() - t0:.1f}s)")
+    except Exception as e:
+        kprint(f"✖ {name} (failed in {time.time() - t0:.1f}s): {e}")
+        raise
+
+
+@contextmanager
+def suppress_stdout_stderr():
+    """Silence libs that print to stdout/stderr (causal-learn can be noisy)."""
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
 
 
 # =========================
@@ -71,24 +106,18 @@ class KairosConfig:
     clamp_likert_max: float = 5.0
     likert_detection_threshold: float = 0.95  # >=95% values within [1,5] => clamp
 
+    # UX
+    verbose: bool = True
+    print_dag_summary: bool = True
+    max_print_cols: int = 25  # avoid huge spam
+
 
 # =========================
-# Helpers
+# Utilities
 # =========================
-
-@contextmanager
-def suppress_stdout_stderr():
-    """Silence libraries that print to stdout/stderr during discovery."""
-    old_out, old_err = sys.stdout, sys.stderr
-    try:
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_out, old_err
-
 
 def preprocess_for_estimation(df: pd.DataFrame) -> pd.DataFrame:
+    """Light cleaning; keep NaNs and handle per-step. Coerce mostly-numeric object columns."""
     df = df.copy()
     for c in df.columns:
         if df[c].dtype == "object":
@@ -105,6 +134,10 @@ def _to_numeric_series(s: pd.Series) -> pd.Series:
 
 
 def _binary_encode_treatment(work: pd.DataFrame, x: str) -> Tuple[pd.Series, Optional[Dict[Any, int]]]:
+    """
+    For EconML: if x is categorical/object, map to binary using top-2 categories.
+    This allows LinearDML discrete_treatment=True in those cases.
+    """
     s = work[x]
     if pd.api.types.is_numeric_dtype(s):
         return _to_numeric_series(s), None
@@ -119,6 +152,7 @@ def _binary_encode_treatment(work: pd.DataFrame, x: str) -> Tuple[pd.Series, Opt
 
 
 def encode_controls_W(work: pd.DataFrame, cols: List[str]) -> Tuple[Optional[np.ndarray], Optional[ColumnTransformer]]:
+    """Encode confounders as W (controls) for EconML. Return (None,None) if empty."""
     if not cols:
         return None, None
 
@@ -161,10 +195,14 @@ def dag_to_dot(dag: nx.DiGraph, highlight_y: Optional[str] = None) -> str:
 
 
 # =========================
-# Discovery preprocessing
+# Discovery preprocessing (numeric, no NaNs)
 # =========================
 
-def _build_discovery_matrix(df: pd.DataFrame, cols: List[str], cfg: KairosConfig) -> Tuple[np.ndarray, List[str], Dict[str, str]]:
+def _build_discovery_matrix(
+    df: pd.DataFrame,
+    cols: List[str],
+    cfg: KairosConfig
+) -> Tuple[np.ndarray, List[str], Dict[str, str]]:
     sub = df[cols].copy()
 
     num_cols = [c for c in cols if pd.api.types.is_numeric_dtype(sub[c])]
@@ -187,7 +225,9 @@ def _build_discovery_matrix(df: pd.DataFrame, cols: List[str], cfg: KairosConfig
         transformers.append(("cat", cat_pipe, cat_cols))
 
     pre = ColumnTransformer(transformers, remainder="drop", verbose_feature_names_out=False)
-    X = np.asarray(pre.fit_transform(sub), dtype=float)
+
+    with stage("Discovery preprocessing (impute + encode)"):
+        X = np.asarray(pre.fit_transform(sub), dtype=float)
 
     if np.isnan(X).any():
         raise ValueError("Discovery matrix contains NaNs after imputation/encoding.")
@@ -197,6 +237,7 @@ def _build_discovery_matrix(df: pd.DataFrame, cols: List[str], cfg: KairosConfig
     except Exception:
         feature_names = [f"v{i}" for i in range(X.shape[1])]
 
+    # Robust mapping: match exact or "col_" prefix (not partial)
     feat_to_col: Dict[str, str] = {}
     for fn in feature_names:
         mapped = None
@@ -206,10 +247,17 @@ def _build_discovery_matrix(df: pd.DataFrame, cols: List[str], cfg: KairosConfig
                 break
         feat_to_col[fn] = mapped if mapped is not None else fn
 
+    if cfg.verbose:
+        kprint(f"Discovery matrix X shape: {X.shape} (features={len(feature_names)})")
+        # Show a few feature names only
+        preview = feature_names[:min(len(feature_names), 15)]
+        kprint(f"Encoded feature preview: {preview}{' ...' if len(feature_names) > 15 else ''}")
+
     return X, feature_names, feat_to_col
 
 
 def _extract_graph_matrix(res: Any) -> np.ndarray:
+    """Handle causal-learn return-type variance (sometimes tuple)."""
     if hasattr(res, "G") and hasattr(res.G, "graph"):
         return res.G.graph
     if hasattr(res, "graph"):
@@ -228,20 +276,27 @@ def _extract_graph_matrix(res: Any) -> np.ndarray:
 # =========================
 
 def discover_pc_fci(df: pd.DataFrame, cols: List[str], cfg: KairosConfig) -> List[Tuple[str, str, str]]:
-    X, feature_names, feat_to_col = _build_discovery_matrix(df, cols, cfg)
+    with stage("Causal discovery setup"):
+        X, feature_names, feat_to_col = _build_discovery_matrix(df, cols, cfg)
 
     if X.shape[0] < cfg.min_rows_discovery:
-        raise ValueError(f"Too few rows for discovery: {X.shape[0]}")
+        raise ValueError(f"Too few rows for discovery: {X.shape[0]} (min={cfg.min_rows_discovery})")
 
-    with suppress_stdout_stderr():
-        pc_res = pc(data=X, alpha=cfg.pc_alpha, indep_test="fisherz", node_names=feature_names)
-    pc_mat = _extract_graph_matrix(pc_res)
+    with stage("PC algorithm"):
+        with suppress_stdout_stderr():
+            pc_res = pc(data=X, alpha=cfg.pc_alpha, indep_test="fisherz", node_names=feature_names)
+        pc_mat = _extract_graph_matrix(pc_res)
 
-    with suppress_stdout_stderr():
-        fci_res = fci(dataset=X, independence_test_method="fisherz", alpha=cfg.fci_alpha, node_names=feature_names)
-    fci_mat = _extract_graph_matrix(fci_res)
+    with stage("FCI algorithm (can be slow)"):
+        with suppress_stdout_stderr():
+            fci_res = fci(dataset=X, independence_test_method="fisherz", alpha=cfg.fci_alpha, node_names=feature_names)
+        fci_mat = _extract_graph_matrix(fci_res)
 
     def collect_edges(mat: np.ndarray) -> List[Tuple[str, str]]:
+        """
+        Collect feature-level edges, map to raw-column edges, and
+        forbid edges between one-hot siblings from same raw column.
+        """
         out: List[Tuple[str, str]] = []
         n = len(feature_names)
         for i in range(n):
@@ -253,52 +308,74 @@ def discover_pc_fci(df: pd.DataFrame, cols: List[str], cfg: KairosConfig) -> Lis
                 a_feat, b_feat = feature_names[i], feature_names[j]
                 a_col, b_col = feat_to_col[a_feat], feat_to_col[b_feat]
 
-                # forbid within-column one-hot sibling edges
+                # Critical: eliminate within-column one-hot edges
                 if a_col == b_col:
                     continue
 
                 out.append((a_col, b_col))
         return out
 
-    pc_edges = collect_edges(pc_mat)
-    fci_edges = collect_edges(fci_mat)
+    with stage("Edge aggregation (feature -> raw columns)"):
+        pc_edges = collect_edges(pc_mat)
+        fci_edges = collect_edges(fci_mat)
 
-    merged: Dict[Tuple[str, str], Set[str]] = {}
-    for (a, b) in pc_edges:
-        merged.setdefault((a, b), set()).add("pc")
-    for (a, b) in fci_edges:
-        merged.setdefault((a, b), set()).add("fci")
+        merged: Dict[Tuple[str, str], Set[str]] = {}
+        for (a, b) in pc_edges:
+            merged.setdefault((a, b), set()).add("pc")
+        for (a, b) in fci_edges:
+            merged.setdefault((a, b), set()).add("fci")
 
-    return [(a, b, ",".join(sorted(srcs))) for (a, b), srcs in merged.items()]
+        edges = [(a, b, ",".join(sorted(srcs))) for (a, b), srcs in merged.items()]
+
+    if cfg.verbose:
+        kprint(f"Discovered raw edges: {len(edges)}")
+        if len(edges) > 0:
+            preview = edges[:min(len(edges), 12)]
+            kprint(f"Edge preview: {preview}{' ...' if len(edges) > 12 else ''}")
+
+    return edges
 
 
-def build_dag(edges: List[Tuple[str, str, str]], cols: List[str]) -> nx.DiGraph:
-    G = nx.DiGraph()
-    G.add_nodes_from(cols)
+def build_dag(edges: List[Tuple[str, str, str]], cols: List[str], cfg: KairosConfig) -> nx.DiGraph:
+    with stage("Build DAG (and break cycles)"):
+        G = nx.DiGraph()
+        G.add_nodes_from(cols)
 
-    for a, b, src in edges:
-        if a == b:
-            continue
-        if not G.has_edge(a, b):
-            G.add_edge(a, b, source=src)
+        for a, b, src in edges:
+            if a == b:
+                continue
+            if not G.has_edge(a, b):
+                G.add_edge(a, b, source=src)
 
-    # break cycles conservatively
-    while True:
-        try:
-            cycle = nx.find_cycle(G, orientation="original")
-            u, v, _ = cycle[0]
-            G.remove_edge(u, v)
-        except Exception:
-            break
+        # Break cycles conservatively
+        removed = 0
+        while True:
+            try:
+                cycle = nx.find_cycle(G, orientation="original")
+                u, v, _ = cycle[0]
+                G.remove_edge(u, v)
+                removed += 1
+            except Exception:
+                break
 
+    if cfg.verbose and cfg.print_dag_summary:
+        kprint(f"DAG summary: nodes={G.number_of_nodes()}, edges={G.number_of_edges()}, cycle_edges_removed={removed}")
     return G
 
 
 # =========================
-# DoWhy + EconML
+# DoWhy + EconML effect estimation
 # =========================
 
-def estimate_effect(df_all_nodes: pd.DataFrame, dag: nx.DiGraph, x: str, y: str, confounders: List[str], cfg: KairosConfig) -> Dict[str, Any]:
+def estimate_effect(
+    df_all_nodes: pd.DataFrame,
+    dag: nx.DiGraph,
+    x: str,
+    y: str,
+    confounders: List[str],
+    cfg: KairosConfig
+) -> Dict[str, Any]:
+
     needed = [y, x] + confounders
     work = df_all_nodes[needed].copy()
 
@@ -310,15 +387,18 @@ def estimate_effect(df_all_nodes: pd.DataFrame, dag: nx.DiGraph, x: str, y: str,
     if len(work) < cfg.min_rows_estimation:
         return {"x": x, "effect": 0.0, "error": f"Too few rows after cleaning: {len(work)}"}
 
+    # DoWhy identification data: include all dag nodes (best effort) to avoid warnings
     model_data = df_all_nodes[[n for n in dag.nodes() if n in df_all_nodes.columns]].copy()
     model_data[y] = _to_numeric_series(model_data[y])
     if mapping is not None:
         model_data[x] = model_data[x].map(mapping)
     model_data = model_data.dropna(subset=[y, x])
 
+    # Identify effect with DoWhy
     model = CausalModel(data=model_data, treatment=x, outcome=y, graph=dag)
     estimand = model.identify_effect()
 
+    # EconML estimation with W controls, X=None
     W, _ = encode_controls_W(work, confounders)
     Y = work[y].values.astype(float)
     T = work["_T_"].values.astype(float)
@@ -326,9 +406,9 @@ def estimate_effect(df_all_nodes: pd.DataFrame, dag: nx.DiGraph, x: str, y: str,
     uniq = np.unique(T)
     is_binary = len(uniq) <= 2 and set(uniq) <= {0.0, 1.0}
 
-    model_y = RandomForestRegressor(n_estimators=300, random_state=42, min_samples_leaf=10)
+    model_y = RandomForestRegressor(n_estimators=250, random_state=42, min_samples_leaf=10)
     model_t = LogisticRegression(max_iter=2000) if is_binary else RandomForestRegressor(
-        n_estimators=300, random_state=42, min_samples_leaf=10
+        n_estimators=250, random_state=42, min_samples_leaf=10
     )
 
     est = LinearDML(
@@ -338,6 +418,7 @@ def estimate_effect(df_all_nodes: pd.DataFrame, dag: nx.DiGraph, x: str, y: str,
         cv=cfg.econml_cv,
         random_state=42
     )
+
     est.fit(Y, T, X=None, W=W)
     ate = float(est.ate(X=None))
 
@@ -353,7 +434,7 @@ def estimate_effect(df_all_nodes: pd.DataFrame, dag: nx.DiGraph, x: str, y: str,
 
 
 # =========================
-# SCM Counterfactuals
+# SCM Counterfactuals (DoWhy GCM)
 # =========================
 
 def _detect_likert(series: pd.Series, cfg: KairosConfig) -> bool:
@@ -381,9 +462,9 @@ def propose_intervention_value(df: pd.DataFrame, x: str, cfg: KairosConfig) -> O
 
 def _as_callable_interventions(interventions: Dict[str, float]) -> Dict[str, Any]:
     """
-    DoWhy GCM expects interventions[node] to be a callable in some versions:
-        interventions[node](pre_value) -> post_value
-    Convert floats to constant functions.
+    Some DoWhy versions require interventions[node] to be callable:
+      interventions[node](pre_value) -> post_value
+    Convert numeric constants to constant functions.
     """
     out: Dict[str, Any] = {}
     for k, v in interventions.items():
@@ -398,105 +479,126 @@ def gcm_interventional_samples_compat(
     scm: StructuralCausalModel,
     observed_data: pd.DataFrame,
     interventions: Dict[str, Any],
-    n_samples: int
+    n_samples: int,
+    cfg: KairosConfig
 ) -> pd.DataFrame:
     """
-    interventional_samples signatures differ across DoWhy versions.
+    Compatibility layer for dowhy.gcm.whatif.interventional_samples.
 
-    In your version (per error), you cannot set observed_samples and num_samples_to_draw together.
-    Strategy:
-      - If observed_samples is required/used: sample observed_data to size n_samples and call WITHOUT num_samples_to_draw.
-      - Otherwise: call with num_samples_to_draw or num_samples if supported.
+    Your DoWhy version raises:
+      "Either observed_samples or num_samples_to_draw need to be set, not both!"
+
+    Therefore:
+      - If observed_data is required/used: SUBSAMPLE observed_data to n_samples and call WITHOUT num_samples_to_draw.
+      - Otherwise: call with num_samples_to_draw (or num_samples) only.
     """
-    try:
-        sig = inspect.signature(interventional_samples)
-        params = sig.parameters
-        names = list(params.keys())
-    except Exception:
-        sig, params, names = None, None, []
-
     def _sample_obs(df: pd.DataFrame, n: int) -> pd.DataFrame:
         if len(df) >= n:
             return df.sample(n=n, replace=False, random_state=42)
         return df.sample(n=n, replace=True, random_state=42)
 
-    # Case A: function clearly takes observed_samples/observed_data as positional (2nd arg)
-    # Call using observed_samples ONLY, and control the count via subsampling.
+    sig = None
+    try:
+        sig = inspect.signature(interventional_samples)
+        params = sig.parameters
+        names = list(params.keys())
+    except Exception:
+        params = {}
+        names = []
+
+    if cfg.verbose:
+        kprint(f"SCM: interventional_samples signature params={names[:8]}{' ...' if len(names) > 8 else ''}")
+
+    # Case A: observed_samples/observed_data is positional second argument
     if sig is not None and len(names) >= 3 and names[1] in ("observed_samples", "observed_data", "data"):
         obs = _sample_obs(observed_data, n_samples)
         return interventional_samples(scm, obs, interventions)
 
-    # Case B: keyword params exist
-    if sig is not None:
-        if "observed_samples" in params:
-            obs = _sample_obs(observed_data, n_samples)
-            return interventional_samples(scm, observed_samples=obs, interventions=interventions)
+    # Case B: keyword observed_samples / observed_data exists
+    if "observed_samples" in params:
+        obs = _sample_obs(observed_data, n_samples)
+        return interventional_samples(scm, observed_samples=obs, interventions=interventions)
 
-        if "observed_data" in params:
-            obs = _sample_obs(observed_data, n_samples)
-            return interventional_samples(scm, observed_data=obs, interventions=interventions)
+    if "observed_data" in params:
+        obs = _sample_obs(observed_data, n_samples)
+        return interventional_samples(scm, observed_data=obs, interventions=interventions)
 
-        # No observed_samples keyword: prefer explicit n
-        if "num_samples_to_draw" in params:
-            return interventional_samples(scm, interventions=interventions, num_samples_to_draw=n_samples)
-        if "num_samples" in params:
-            return interventional_samples(scm, interventions=interventions, num_samples=n_samples)
+    # Case C: no observed_samples path — use explicit n if supported
+    if "num_samples_to_draw" in params:
+        return interventional_samples(scm, interventions=interventions, num_samples_to_draw=n_samples)
 
-    # Fallbacks (positional)
+    if "num_samples" in params:
+        return interventional_samples(scm, interventions=interventions, num_samples=n_samples)
+
+    # Fallbacks
     try:
         obs = _sample_obs(observed_data, n_samples)
         return interventional_samples(scm, obs, interventions)
     except TypeError:
-        pass
-
-    try:
-        return interventional_samples(scm, interventions=interventions, num_samples_to_draw=n_samples)
-    except TypeError:
-        pass
-
-    return interventional_samples(scm, interventions=interventions)
+        return interventional_samples(scm, interventions=interventions)
 
 
-def build_and_sample_scm(df: pd.DataFrame, dag: nx.DiGraph, y: str, interventions: Dict[str, float], cfg: KairosConfig) -> Dict[str, Any]:
-    nodes = [n for n in dag.nodes() if n in df.columns]
-    work = df[nodes].copy()
+def build_and_sample_scm(
+    df: pd.DataFrame,
+    dag: nx.DiGraph,
+    y: str,
+    interventions: Dict[str, float],
+    cfg: KairosConfig
+) -> Dict[str, Any]:
 
-    # numeric-only
-    for c in work.columns:
-        work[c] = pd.to_numeric(work[c], errors="coerce")
+    with stage("SCM: prepare numeric-only dataset"):
+        nodes = [n for n in dag.nodes() if n in df.columns]
+        work = df[nodes].copy()
 
-    numeric_cols = []
-    for c in work.columns:
-        s = work[c]
-        if s.notna().sum() >= cfg.min_rows_scm and s.nunique(dropna=True) >= 2:
-            numeric_cols.append(c)
+        # force numeric (categoricals become NaN; SCM only runs on numeric nodes)
+        for c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
 
-    if y not in numeric_cols:
-        return {"error": f"SCM skipped: outcome '{y}' not usable numeric (or too sparse)."}
-    for k in interventions.keys():
-        if k not in numeric_cols:
-            return {"error": f"SCM skipped: intervention var '{k}' not usable numeric (or too sparse)."}
+        numeric_cols = []
+        for c in work.columns:
+            s = work[c]
+            if s.notna().sum() >= cfg.min_rows_scm and s.nunique(dropna=True) >= 2:
+                numeric_cols.append(c)
 
-    dag_num = dag.subgraph(numeric_cols).copy()
-    if len(dag_num.nodes()) < 2:
-        return {"error": "SCM skipped: too few numeric nodes after filtering."}
+        if cfg.verbose:
+            kprint(f"SCM: candidate nodes={len(nodes)}, numeric_usable_nodes={len(numeric_cols)}")
 
-    work_num = work[numeric_cols].dropna(axis=0, how="any")
-    if len(work_num) < cfg.min_rows_scm:
-        return {"error": f"Too few complete rows for SCM fit (numeric-only): {len(work_num)}"}
+        if y not in numeric_cols:
+            return {"error": f"SCM skipped: outcome '{y}' not usable numeric (or too sparse)."}
+        for k in interventions.keys():
+            if k not in numeric_cols:
+                return {"error": f"SCM skipped: intervention var '{k}' not usable numeric (or too sparse)."}
+
+        dag_num = dag.subgraph(numeric_cols).copy()
+        if len(dag_num.nodes()) < 2:
+            return {"error": "SCM skipped: too few numeric nodes after filtering."}
+
+        work_num = work[numeric_cols].dropna(axis=0, how="any")
+        if len(work_num) < cfg.min_rows_scm:
+            return {"error": f"Too few complete rows for SCM fit (numeric-only): {len(work_num)}"}
+
+    if cfg.verbose:
+        kprint(f"SCM: training rows={len(work_num)}, nodes={len(dag_num.nodes())}, edges={dag_num.number_of_edges()}")
+        kprint(f"SCM: interventions={interventions}")
 
     scm = StructuralCausalModel(dag_num)
-    auto.assign_causal_mechanisms(scm, work_num)
-    fit(scm, work_num)
+
+    with stage("SCM: assign causal mechanisms"):
+        auto.assign_causal_mechanisms(scm, work_num)
+
+    with stage("SCM: fit structural equations"):
+        fit(scm, work_num)
 
     interventions_callable = _as_callable_interventions(interventions)
 
-    cf = gcm_interventional_samples_compat(
-        scm=scm,
-        observed_data=work_num,
-        interventions=interventions_callable,
-        n_samples=cfg.scm_samples
-    )
+    with stage(f"SCM: draw interventional samples (n={cfg.scm_samples})"):
+        cf = gcm_interventional_samples_compat(
+            scm=scm,
+            observed_data=work_num,
+            interventions=interventions_callable,
+            n_samples=cfg.scm_samples,
+            cfg=cfg
+        )
 
     if y not in cf.columns:
         return {"error": f"SCM samples missing outcome '{y}'."}
@@ -511,7 +613,7 @@ def build_and_sample_scm(df: pd.DataFrame, dag: nx.DiGraph, y: str, intervention
 
 
 # =========================
-# Difference-making (placeholder)
+# Difference-making filter (placeholder for Strevens operationalization)
 # =========================
 
 def difference_making(effects: List[Dict[str, Any]], controllable: Set[str], cfg: KairosConfig):
@@ -538,7 +640,7 @@ def difference_making(effects: List[Dict[str, Any]], controllable: Set[str], cfg
 
 
 # =========================
-# Narrative
+# Narrative (simple; you’ll later swap for Gemini narrative)
 # =========================
 
 def narrative(y: str, drivers: List[Dict[str, Any]], eliminated: Dict[str, str], counterfactuals: Dict[str, Any]) -> str:
@@ -570,58 +672,112 @@ def narrative(y: str, drivers: List[Dict[str, Any]], eliminated: Dict[str, str],
 # Orchestrator
 # =========================
 
-def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: List[str], uncontrollable: List[str], cfg: KairosConfig) -> Dict[str, Any]:
-    df = preprocess_for_estimation(df)
+def run_kairos(
+    df: pd.DataFrame,
+    y: str,
+    explanans: List[str],
+    controllable: List[str],
+    uncontrollable: List[str],
+    cfg: KairosConfig
+) -> Dict[str, Any]:
+
+    with stage("Initialize"):
+        kprint(f"Outcome (explanandum): {y}")
+        kprint(f"Explanans candidates provided: {len(explanans)}")
+        df = preprocess_for_estimation(df)
+        kprint(f"Input data: rows={len(df)}, cols={df.shape[1]}")
 
     if y not in df.columns:
         raise ValueError(f"Outcome column not found: {y}")
 
     cols = [y] + [c for c in explanans if c in df.columns and c != y]
 
-    # Discovery
-    edges = discover_pc_fci(df, cols, cfg)
-    dag = build_dag(edges, cols)
+    if cfg.verbose:
+        shown = cols[:min(len(cols), cfg.max_print_cols)]
+        kprint(f"Variables used (y + explanans present): {len(cols)} -> {shown}{' ...' if len(cols) > cfg.max_print_cols else ''}")
+
+    # --- Discovery
+    with stage("Run causal discovery (PC + FCI)"):
+        edges = discover_pc_fci(df, cols, cfg)
+
+    dag = build_dag(edges, cols, cfg)
 
     controllable_set = set([c for c in controllable if c in df.columns])
     uncontrollable_set = set([c for c in uncontrollable if c in df.columns])
 
-    # Effects
+    if cfg.verbose:
+        kprint(f"Controllable vars present: {len(controllable_set)}")
+        kprint(f"Uncontrollable vars present: {len(uncontrollable_set)}")
+
+    # --- Effect estimation
     effects: List[Dict[str, Any]] = []
-    for x in cols:
-        if x == y:
-            continue
-        if x not in controllable_set:
-            continue
+    candidates = [x for x in cols if x != y and x in controllable_set]
+    with stage(f"Estimate causal effects (EconML) for {len(candidates)} controllable variables"):
+        for i, x in enumerate(candidates, start=1):
+            kprint(f"  • Effect {i}/{len(candidates)}: estimating '{x}' -> '{y}'")
 
-        parents_x = set(dag.predecessors(x))
-        parents_y = set(dag.predecessors(y))
-        confounders = sorted(list((parents_x | parents_y) & uncontrollable_set))
+            parents_x = set(dag.predecessors(x))
+            parents_y = set(dag.predecessors(y))
+            confounders = sorted(list((parents_x | parents_y) & uncontrollable_set))
 
-        try:
-            effects.append(estimate_effect(df_all_nodes=df, dag=dag, x=x, y=y, confounders=confounders, cfg=cfg))
-        except Exception as e:
-            effects.append({"x": x, "effect": 0.0, "error": str(e)})
+            if cfg.verbose:
+                kprint(f"    Confounders: {confounders if confounders else 'None'}")
 
-    selected, eliminated = difference_making(effects, controllable_set, cfg)
+            t0 = time.time()
+            try:
+                eff = estimate_effect(df_all_nodes=df, dag=dag, x=x, y=y, confounders=confounders, cfg=cfg)
+                effects.append(eff)
+                if "error" in eff:
+                    kprint(f"    → FAILED: {eff['error']} (in {time.time()-t0:.1f}s)")
+                else:
+                    kprint(f"    → ATE={eff['effect']:.4f} (rows={eff.get('rows_used','?')}) (in {time.time()-t0:.1f}s)")
+            except Exception as e:
+                effects.append({"x": x, "effect": 0.0, "error": str(e)})
+                kprint(f"    → EXCEPTION: {e} (in {time.time()-t0:.1f}s)")
 
-    # SCM counterfactuals
+    # --- Difference-making selection
+    with stage("Apply difference-making filter (Strevens placeholder)"):
+        selected, eliminated = difference_making(effects, controllable_set, cfg)
+        kprint(f"Selected drivers: {len(selected)} (max={cfg.max_drivers})")
+        if cfg.verbose and selected:
+            kprint(f"Top drivers: {[d['x'] for d in selected]}")
+
+    # --- SCM counterfactuals
     counterfactuals: Dict[str, Any] = {}
-    for d in selected:
-        x = d["x"]
-        intervention_value = propose_intervention_value(df, x, cfg)
-        if intervention_value is None:
-            counterfactuals[x] = {"error": "SCM skipped: non-numeric (or empty) intervention variable."}
-            continue
+    with stage(f"SCM counterfactuals for {len(selected)} selected drivers"):
+        for i, d in enumerate(selected, start=1):
+            x = d["x"]
+            kprint(f"  • SCM {i}/{len(selected)}: do({x}) counterfactual")
 
-        counterfactuals[x] = build_and_sample_scm(
-            df=df,
-            dag=dag,
-            y=y,
-            interventions={x: intervention_value},
-            cfg=cfg
-        )
+            intervention_value = propose_intervention_value(df, x, cfg)
+            if intervention_value is None:
+                counterfactuals[x] = {"error": "SCM skipped: non-numeric (or empty) intervention variable."}
+                kprint(f"    → SKIPPED: non-numeric/empty intervention")
+                continue
 
-    text = narrative(y, selected, eliminated, counterfactuals)
+            kprint(f"    Intervention value proposed: {intervention_value}")
+
+            t0 = time.time()
+            try:
+                counterfactuals[x] = build_and_sample_scm(
+                    df=df,
+                    dag=dag,
+                    y=y,
+                    interventions={x: intervention_value},
+                    cfg=cfg
+                )
+                if "error" in counterfactuals[x]:
+                    kprint(f"    → FAILED: {counterfactuals[x]['error']} (in {time.time()-t0:.1f}s)")
+                else:
+                    kprint(f"    → CF mean={counterfactuals[x]['counterfactual_mean']:.4f} "
+                           f"CI={counterfactuals[x]['counterfactual_ci']} (in {time.time()-t0:.1f}s)")
+            except Exception as e:
+                counterfactuals[x] = {"error": str(e)}
+                kprint(f"    → EXCEPTION: {e} (in {time.time()-t0:.1f}s)")
+
+    # --- Narrative
+    with stage("Compose narrative"):
+        text = narrative(y, selected, eliminated, counterfactuals)
 
     return {
         "dag": dag,
@@ -635,7 +791,7 @@ def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: Lis
 
 
 # =========================
-# Example usage
+# Example usage (your main)
 # =========================
 
 if __name__ == "__main__":
@@ -688,8 +844,9 @@ if __name__ == "__main__":
         explanans=explanans,
         controllable=controllable,
         uncontrollable=uncontrollable,
-        cfg=KairosConfig()
+        cfg=KairosConfig(verbose=True)
     )
 
+    print("\n" + "=" * 80)
     print(result["narrative"])
     # print(result["dag_dot"])
