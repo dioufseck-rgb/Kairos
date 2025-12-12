@@ -1,0 +1,22 @@
+# Core data + graphs
+pandas>=2.2.0
+numpy>=1.26.0
+networkx>=3.2
+
+# ML utilities used for encoding + nuisance models
+scikit-learn>=1.4.0
+
+# Causal discovery (PC + FCI)
+causal-learn>=0.1.4.0
+
+# Causal inference + SCM (GCM)
+dowhy>=0.11.1
+
+# Effect estimation (DoWhy integration + estimators)
+econml>=0.15.1
+
+# DOT export helper (used by nx.nx_pydot.to_pydot)
+pydot>=2.0.0
+
+# Optional: only needed if you enable Gemini narrative calls
+google-generativeai>=0.7.0
