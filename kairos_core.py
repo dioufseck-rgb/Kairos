@@ -687,6 +687,12 @@ def run_kairos(
         df = preprocess_for_estimation(df)
         kprint(f"Input data: rows={len(df)}, cols={df.shape[1]}")
 
+        # --- Baseline outcome stats (for counterfactual deltas)
+        baseline_y_mean = float(df[y].mean())
+        baseline_y_ci = np.percentile(df[y].values, [5, 95]).tolist()
+        kprint(f"Baseline {y}: mean={baseline_y_mean:.3f}, CI5-95=[{baseline_y_ci[0]:.3f}, {baseline_y_ci[1]:.3f}]")
+
+
     if y not in df.columns:
         raise ValueError(f"Outcome column not found: {y}")
 
@@ -760,17 +766,33 @@ def run_kairos(
             t0 = time.time()
             try:
                 counterfactuals[x] = build_and_sample_scm(
-                    df=df,
-                    dag=dag,
-                    y=y,
-                    interventions={x: intervention_value},
-                    cfg=cfg
+                df=df,
+                dag=dag,
+                y=y,
+                interventions={x: intervention_value},
+                cfg=cfg
                 )
+
                 if "error" in counterfactuals[x]:
                     kprint(f"    → FAILED: {counterfactuals[x]['error']} (in {time.time()-t0:.1f}s)")
                 else:
-                    kprint(f"    → CF mean={counterfactuals[x]['counterfactual_mean']:.4f} "
-                           f"CI={counterfactuals[x]['counterfactual_ci']} (in {time.time()-t0:.1f}s)")
+                    # --- Convert absolute counterfactual into delta on outcome
+                    cf_mean = float(counterfactuals[x]["counterfactual_mean"])
+                    ci_low, ci_high = counterfactuals[x]["counterfactual_ci"]
+
+                    delta_mean = cf_mean - baseline_y_mean
+                    delta_ci = [ci_low - baseline_y_mean, ci_high - baseline_y_mean]
+
+                    counterfactuals[x]["delta_mean"] = delta_mean
+                    counterfactuals[x]["delta_ci"] = delta_ci
+                    counterfactuals[x]["baseline_y_mean"] = baseline_y_mean  # optional, but handy for cards
+
+                    kprint(
+                        f"    → Δ{y}={delta_mean:+.4f} "
+                        f"CI=[{delta_ci[0]:+.4f}, {delta_ci[1]:+.4f}] "
+                        f"(baseline={baseline_y_mean:.4f}, in {time.time()-t0:.1f}s)"
+                    )
+
             except Exception as e:
                 counterfactuals[x] = {"error": str(e)}
                 kprint(f"    → EXCEPTION: {e} (in {time.time()-t0:.1f}s)")
@@ -843,4 +865,27 @@ if __name__ == "__main__":
 
     render_dot_to_file(viz["full_dot"], "/workspaces/Kairos/outputs/test_full", fmt="png")
     render_dot_to_file(viz["abstract_dot"], "/workspaces/Kairos/outputs/test_abs", fmt="png")
+    
+
+    from kairos_narrative import generate_exec_narrative
+
+    exec_narrative = generate_exec_narrative(
+    result=result,
+    y="Overall Trip Satisfaction",
+    max_drivers=3,
+)
+
+    print(exec_narrative)
+    result["exec_narrative"] = exec_narrative
+
+    from narrative import GeminiNarrator, llm_exec_narrative, narrative_json_to_markdown
+
+    narrator = GeminiNarrator(
+    api_key="AIzaSyAG_-bsAMZH9_kZwEKnI3E1RA8Ipx26R4E",
+    model="gemini-2.5-flash",   # or your Gemini 3 model name when available in your account
+    temperature=0.2,
+)
+
+    narr_json = llm_exec_narrative(result=result, y="Overall Trip Satisfaction", narrator=narrator)
+    print(narrative_json_to_markdown(narr_json))
 
