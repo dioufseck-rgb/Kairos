@@ -20,3 +20,12 @@ pydot>=2.0.0
 
 # Optional: only needed if you enable Gemini narrative calls
 google-generativeai>=0.7.0
+
+
+#visualization
+
+graphviz
+
+pydot
+
+pillow

@@ -795,52 +795,35 @@ def run_kairos(
 # =========================
 
 if __name__ == "__main__":
-    df = pd.read_csv("/workspaces/Kairos/hsr.csv")  # replace
+    df = pd.read_csv("/workspaces/Kairos/synth_kairos.csv")  # replace
 
-    explanans = [
-        "Amtrak Product",
-        "Service Class",
-        "Age Range",
-        "Mileage",
-        "Total Fare Amount",
-        "Departure Performance (Minutes Late)",
-        "Arrival Performance (Minutes Late)",
-        "Boarding Station Overall",
-        "On-time Performance of the Train",
-        "Communication About Train Status",
-        "Cleanliness of the Train",
-        "Comfort of Train Ride",
-        "Food and Beverage on the Train",
-        "Wi-Fi on the Train",
-        "Friendliness of Amtrak Personnel at the Boarding Station",
-        "Friendliness of Amtrak Personnel on the Train"
+    y = "Overall Satisfaction"
+
+    uncontrollable = [
+        "Region", "Customer Segment", "Age Range", "Season", "Distance (Miles)"
     ]
 
     controllable = [
         "Total Fare Amount",
-        "Departure Performance (Minutes Late)",
-        "Arrival Performance (Minutes Late)",
-        "Boarding Station Overall",
-        "On-time Performance of the Train",
-        "Communication About Train Status",
-        "Cleanliness of the Train",
-        "Comfort of Train Ride",
-        "Food and Beverage on the Train",
-        "Wi-Fi on the Train",
-        "Friendliness of Amtrak Personnel at the Boarding Station",
-        "Friendliness of Amtrak Personnel on the Train"
+        "Communication About Status",
+        "Cleanliness",
+        "Comfort",
+        "Wi-Fi",
+        "Food & Beverage",
+        # You can choose whether to treat these as controllable:
+        "Departure Delay (Minutes)",
+        "Arrival Delay (Minutes)",
+        "On-time Performance",
+        "Staffing Level (Proxy)",
+        "Track Congestion (Proxy)",
     ]
 
-    uncontrollable = [
-        "Amtrak Product",
-        "Service Class",
-        "Age Range",
-        "Mileage",
-    ]
+    explanans = [c for c in df.columns if c != y]
+
 
     result = run_kairos(
         df=df,
-        y="Overall Trip Satisfaction",
+        y=y,
         explanans=explanans,
         controllable=controllable,
         uncontrollable=uncontrollable,
@@ -850,3 +833,14 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print(result["narrative"])
     # print(result["dag_dot"])
+
+    from kairos_viz import make_visual_bundle
+
+
+
+    viz = make_visual_bundle(result, y="Overall Trip Satisfaction")
+    from kairos_viz import render_dot_to_file
+
+    render_dot_to_file(viz["full_dot"], "/workspaces/Kairos/outputs/test_full", fmt="png")
+    render_dot_to_file(viz["abstract_dot"], "/workspaces/Kairos/outputs/test_abs", fmt="png")
+
