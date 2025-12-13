@@ -159,7 +159,7 @@ class GeminiNarrator:
         temperature: float = 0.2,
         max_output_tokens: int = 1200,
     ):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.api_key = api_key or os.getenv("GEMINI_KEY") or os.getenv("GEMINI_KEY")
         if not self.api_key:
             raise ValueError(
                 "Missing Gemini API key. Set GEMINI_API_KEY (recommended) or GOOGLE_API_KEY environment variable."
