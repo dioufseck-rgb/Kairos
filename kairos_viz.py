@@ -681,3 +681,29 @@ def make_visual_bundle(
         bundle["render_errors"].update(render_errors)
 
     return bundle
+def render_nx_fallback_png(G, out_path: str, *, figsize=(14, 10)) -> str:
+    """
+    Pure-Python fallback PNG renderer using networkx + matplotlib.
+    Works even when Graphviz 'dot' executable is not installed.
+    """
+    import matplotlib.pyplot as plt
+    import networkx as nx
+    import os
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    plt.figure(figsize=figsize)
+    try:
+        pos = nx.spring_layout(G, seed=42, k=0.8)
+    except Exception:
+        pos = nx.random_layout(G, seed=42)
+
+    nx.draw_networkx_nodes(G, pos, node_size=900)
+    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", width=1.2)
+    nx.draw_networkx_labels(G, pos, font_size=9)
+
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180)
+    plt.close()
+    return out_path

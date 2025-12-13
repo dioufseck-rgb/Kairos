@@ -1,0 +1,75 @@
+version: 1
+
+dataset:
+  path: "/workspaces/Kairos/synth_manufacturing.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+target:
+  outcome: "Unplanned Downtime Hours (Next 30d)"
+
+columns:
+  include: []
+  exclude: []
+
+roles:
+  explanans: []   # leave empty: will infer all columns except outcome
+
+  controllable:
+    - "Maintenance Quality Index"
+    - "Lubrication Interval (Days)"
+    - "Operator Training Hours (Monthly)"
+    - "Spare Parts Availability Index"
+    - "Production Target Pressure Index"
+
+  uncontrollable:
+    - "Plant"
+    - "Machine Type"
+    - "Shift"
+    - "Ambient Temperature (C)"
+    - "Humidity (%)"
+    - "Machine Age (Years)"
+
+types:
+  numeric:
+    - "Ambient Temperature (C)"
+    - "Humidity (%)"
+    - "Machine Age (Years)"
+    - "Maintenance Quality Index"
+    - "Lubrication Interval (Days)"
+    - "Operator Training Hours (Monthly)"
+    - "Spare Parts Availability Index"
+    - "Production Target Pressure Index"
+    - "Fatigue Index"
+    - "Procedure Compliance Index"
+    - "Wear Index"
+    - "Cooling Efficiency Index"
+    - "Vibration RMS"
+    - "Defect Rate Index"
+    - "Failure Risk (0-1)"
+    - "Repair Duration (Hours)"
+    - "Unplanned Downtime Hours (Next 30d)"
+  categorical:
+    - "Plant"
+    - "Machine Type"
+    - "Shift"
+
+preprocess:
+  drop_rows_with_any_na: true
+  coerce_numeric_threshold: 0.90
+  trim_whitespace_in_strings: true
+
+config:
+  pc_alpha: 0.05
+  fci_alpha: 0.05
+  econml_cv: 5
+  max_drivers: 5
+  scm_samples: 1000
+  verbose: true
+
+llm:
+  enabled: true
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  temperature: 0.0
+  api_key_env: "GEMINI_KEY"

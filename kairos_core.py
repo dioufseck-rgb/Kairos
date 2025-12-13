@@ -1062,7 +1062,88 @@ def run_from_yaml(spec_path: str) -> Dict[str, Any]:
         uncontrollable=uncontrollable,
         cfg=cfg,
     )
+    import os, json, time
 
+    def _ensure_dir(p: str):
+        os.makedirs(p, exist_ok=True)
+
+    def _write_text(path: str, text: str):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _write_json(path: str, obj: dict):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+
+    def _safe_make_visuals(result: dict, y: str, out_dir: str) -> dict:
+        from kairos_viz import (
+            make_visual_bundle,
+            render_chain_cards_png,
+            render_dot_to_file,           # may fail if dot missing
+            render_nx_fallback_png,        # we will add this in kairos_viz.py below
+        )
+
+        _ensure_dir(out_dir)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        prefix = os.path.join(out_dir, f"kairos_{stamp}")
+
+        print(f"[Viz] Output dir: {out_dir}")
+        print("[Viz] Building visual bundle...")
+        viz = make_visual_bundle(result=result, y=y)
+
+        # Always write DOT files (even if PNG rendering fails)
+        if viz.get("full_dot"):
+            _write_text(prefix + "_full.dot", viz["full_dot"])
+            print("[Viz] Wrote:", prefix + "_full.dot")
+        if viz.get("drivers_dot"):
+            _write_text(prefix + "_drivers.dot", viz["drivers_dot"])
+            print("[Viz] Wrote:", prefix + "_drivers.dot")
+
+        # Always write summary JSON
+        _write_json(prefix + "_bundle.json", {
+            "y": y,
+            "selected_drivers": result.get("selected_drivers", []),
+            "counterfactuals": result.get("counterfactuals", {}),
+            "causal_chains": result.get("causal_chains", {}),
+        })
+        print("[Viz] Wrote:", prefix + "_bundle.json")
+
+        # Try Graphviz PNGs
+        try:
+            if viz.get("full_dot"):
+                render_dot_to_file(viz["full_dot"], prefix + "_full", fmt="png")
+                print("[Viz] Wrote:", prefix + "_full.png")
+            if viz.get("drivers_dot"):
+                render_dot_to_file(viz["drivers_dot"], prefix + "_drivers", fmt="png")
+                print("[Viz] Wrote:", prefix + "_drivers.png")
+        except Exception as e:
+            print(f"[Viz] Graphviz render failed ({type(e).__name__}): {e}")
+            print("[Viz] Falling back to NetworkX PNG rendering...")
+            # Fallback PNGs that do not require system 'dot'
+            if result.get("dag") is not None:
+                render_nx_fallback_png(result["dag"], prefix + "_full_fallback.png")
+                print("[Viz] Wrote:", prefix + "_full_fallback.png")
+
+        # Chain cards PNG (pure PIL; should always work)
+        try:
+            cards_path = render_chain_cards_png(
+                y=y,
+                selected_drivers=result.get("selected_drivers", []),
+                causal_chains=result.get("causal_chains", {}),
+                counterfactuals=result.get("counterfactuals", {}),
+                baseline=result.get("baseline", {}),
+                out_path=prefix + "_cards.png",
+            )
+            print("[Viz] Wrote:", cards_path)
+        except Exception as e:
+            print(f"[Viz] Chain cards failed ({type(e).__name__}): {e}")
+
+        return {"out_prefix": prefix, "viz": viz}
+    
+    out_dir = (spec.get("outputs") or {}).get("dir", "/workspaces/Kairos/outputs")
+    viz_info = _safe_make_visuals(result=result, y=y, out_dir=out_dir)
+    result["outputs"] = viz_info
+    
     # ---------------------------
     # 7) Optional LLM narrative (from YAML llm section)
     # ---------------------------
@@ -1092,7 +1173,7 @@ def run_from_yaml(spec_path: str) -> Dict[str, Any]:
 # =========================
 
 if __name__ == "__main__":
-    result = run_from_yaml("/workspaces/Kairos/kairos_run.yaml")
+    result = run_from_yaml("/workspaces/Kairos/kairos_run_manufacturing.yaml")
     print("\n" + "=" * 80)
     print(result.get("narrative", ""))
     if "exec_narrative" in result:

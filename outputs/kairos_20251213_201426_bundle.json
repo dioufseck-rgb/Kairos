@@ -1,0 +1,233 @@
+{
+  "y": "Unplanned Downtime Hours (Next 30d)",
+  "selected_drivers": [
+    {
+      "x": "Spare Parts Availability Index",
+      "effect": -2.115613592697025,
+      "estimand": "Estimand type: EstimandType.NONPARAMETRIC_ATE\n\n### Estimand : 1\nEstimand name: backdoor\nEstimand expression:\n                d                                                        \n─────────────────────────────────(E[Unplanned Downtime Hours (Next 30d)])\nd[Spare Parts Availability Index]                                        \nEstimand assumption 1, Unconfoundedness: If U→{Spare Parts Availability Index} and U→Unplanned Downtime Hours (Next 30d) then P(Unplanned Downtime Hours (Next 30d)|Spare Parts Availability Index,,U) = P(Unplanned Downtime Hours (Next 30d)|Spare Parts Availability Index,)\n\n### Estimand : 2\nEstimand name: iv\nNo such variable(s) found!\n\n### Estimand : 3\nEstimand name: frontdoor\nNo such variable(s) found!\n\n### Estimand : 4\nEstimand name: general_adjustment\nEstimand expression:\n                d                                                        \n─────────────────────────────────(E[Unplanned Downtime Hours (Next 30d)])\nd[Spare Parts Availability Index]                                        \nEstimand assumption 1, Unconfoundedness: If U→{Spare Parts Availability Index} and U→Unplanned Downtime Hours (Next 30d) then P(Unplanned Downtime Hours (Next 30d)|Spare Parts Availability Index,,U) = P(Unplanned Downtime Hours (Next 30d)|Spare Parts Availability Index,)\n",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Maintenance Quality Index",
+      "effect": -2.0207425134459656,
+      "estimand": "No directed path from ['Maintenance Quality Index'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Production Target Pressure Index",
+      "effect": 1.6558936614276527,
+      "estimand": "Estimand type: EstimandType.NONPARAMETRIC_ATE\n\n### Estimand : 1\nEstimand name: backdoor\nEstimand expression:\n                 d                                                         \n───────────────────────────────────(E[Unplanned Downtime Hours (Next 30d)])\nd[Production Target Pressure Index]                                        \nEstimand assumption 1, Unconfoundedness: If U→{Production Target Pressure Index} and U→Unplanned Downtime Hours (Next 30d) then P(Unplanned Downtime Hours (Next 30d)|Production Target Pressure Index,,U) = P(Unplanned Downtime Hours (Next 30d)|Production Target Pressure Index,)\n\n### Estimand : 2\nEstimand name: iv\nNo such variable(s) found!\n\n### Estimand : 3\nEstimand name: frontdoor\nEstimand expression:\n ⎡                                                                                                  ↪\nE⎢───────────────────────────────────────────────────────────────────────────────────────────────── ↪\n ⎣d[Wear Index  Repair Duration (Hours)  Failure Risk (0-1)  Cooling Efficiency Index  Defect Rate  ↪\n\n↪          d                                                                                        ↪\n↪ ───────────────────────────────────────────────────────────────────────────────────────────────── ↪\n↪ Index  Procedure Compliance Index  Vibration RMS  Ambient Temperature (C)  Fatigue Index  Plant   ↪\n\n↪                                                                            ∂                      ↪\n↪ ────────────────────(Unplanned Downtime Hours (Next 30d))⋅───────────────────────────────────([We ↪\n↪ Machine Type  Shift]                                      ∂[Production Target Pressure Index]     ↪\n\n↪                                                                                                   ↪\n↪ ar Index  Repair Duration (Hours)  Failure Risk (0-1)  Cooling Efficiency Index  Defect Rate Inde ↪\n↪                                                                                                   ↪\n\n↪                                                                                                   ↪\n↪ x  Procedure Compliance Index  Vibration RMS  Ambient Temperature (C)  Fatigue Index  Plant  Mach ↪\n↪                                                                                                   ↪\n\n↪                  ⎤\n↪ ine Type  Shift])⎥\n↪                  ⎦\nEstimand assumption 1, Full-mediation: Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift intercepts (blocks) all directed paths from Production Target Pressure Index to U,n,p,l,a,n,n,e,d, ,D,o,w,n,t,i,m,e, ,H,o,u,r,s, ,(,N,e,x,t, ,3,0,d,).\nEstimand assumption 2, First-stage-unconfoundedness: If U→{Production Target Pressure Index} and U→{Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift} then P(Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift|Production Target Pressure Index,U) = P(Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift|Production Target Pressure Index)\nEstimand assumption 3, Second-stage-unconfoundedness: If U→{Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift} and U→Unplanned Downtime Hours (Next 30d) then P(Unplanned Downtime Hours (Next 30d)|Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift, Production Target Pressure Index, U) = P(Unplanned Downtime Hours (Next 30d)|Wear Index,Repair Duration (Hours),Failure Risk (0-1),Cooling Efficiency Index,Defect Rate Index,Procedure Compliance Index,Vibration RMS,Ambient Temperature (C),Fatigue Index,Plant,Machine Type,Shift, Production Target Pressure Index)\n\n### Estimand : 4\nEstimand name: general_adjustment\nEstimand expression:\n                 d                                                         \n───────────────────────────────────(E[Unplanned Downtime Hours (Next 30d)])\nd[Production Target Pressure Index]                                        \nEstimand assumption 1, Unconfoundedness: If U→{Production Target Pressure Index} and U→Unplanned Downtime Hours (Next 30d) then P(Unplanned Downtime Hours (Next 30d)|Production Target Pressure Index,,U) = P(Unplanned Downtime Hours (Next 30d)|Production Target Pressure Index,)\n",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Lubrication Interval (Days)",
+      "effect": 0.4169077257690758,
+      "estimand": "No directed path from ['Lubrication Interval (Days)'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Operator Training Hours (Monthly)",
+      "effect": -0.13147276580368333,
+      "estimand": "No directed path from ['Operator Training Hours (Monthly)'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    }
+  ],
+  "counterfactuals": {
+    "Spare Parts Availability Index": {
+      "counterfactual_mean": 22.390145859871986,
+      "counterfactual_ci": [
+        9.314848461591351,
+        33.887046617705266
+      ],
+      "interventions": {
+        "Spare Parts Availability Index": 1.006411823677536
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -2.398743232771011,
+      "delta_ci": [
+        -15.474040631051645,
+        9.09815752506227
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Maintenance Quality Index": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Maintenance Quality Index": 0.9824729259051687
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Production Target Pressure Index": {
+      "counterfactual_mean": 26.754415753721183,
+      "counterfactual_ci": [
+        14.553455285490537,
+        38.43939856933573
+      ],
+      "interventions": {
+        "Production Target Pressure Index": 1.0122869588943268
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": 1.9655266610781865,
+      "delta_ci": [
+        -10.235433807152459,
+        13.650509476692733
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Lubrication Interval (Days)": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Lubrication Interval (Days)": 15.01764112259031
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Operator Training Hours (Monthly)": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Operator Training Hours (Monthly)": 6.960119019467393
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    }
+  },
+  "causal_chains": {}
+}
