@@ -1,0 +1,78 @@
+version: 1
+
+dataset:
+  path: "/workspaces/Kairos/hsr.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+target:
+  outcome: "Overall Trip Satisfaction"
+
+columns:
+  # Optional: if empty, use all columns from CSV
+  include: []     # e.g. ["Amtrak Product", "Service Class", ...]
+  exclude: []     # e.g. ["Survey ID"]
+
+roles:
+  # If explanans is empty, we will infer as "all columns except outcome"
+  explanans: []   # explicit list OR leave empty
+
+  controllable:
+    - "Total Fare Amount"
+    - "Departure Performance (Minutes Late)"
+    - "Arrival Performance (Minutes Late)"
+    - "Boarding Station Overall"
+    - "On-time Performance of the Train"
+    - "Communication About Train Status"
+    - "Cleanliness of the Train"
+    - "Comfort of Train Ride"
+    - "Food and Beverage on the Train"
+    - "Wi-Fi on the Train"
+    - "Friendliness of Amtrak Personnel at the Boarding Station"
+    - "Friendliness of Amtrak Personnel on the Train"
+
+  uncontrollable:
+    - "Amtrak Product"
+    - "Service Class"
+    - "Age Range"
+    - "Mileage"
+
+types:
+  # Explicit typing (recommended). Anything not listed is inferred.
+  numeric:
+    - "Mileage"
+    - "Total Fare Amount"
+    - "Departure Performance (Minutes Late)"
+    - "Arrival Performance (Minutes Late)"
+  categorical:
+    - "Amtrak Product"
+    - "Service Class"
+    - "Age Range"
+
+preprocess:
+  drop_rows_with_any_na: true
+  coerce_numeric_threshold: 0.90   # try numeric coercion for object cols if >=90% parseable
+  trim_whitespace_in_strings: true
+
+constraints:
+  # Prevent causal edges among one-hot expansions of same original feature (for later).
+  # You can use this even before UI: just define groups by original column.
+  mutual_exclusion_groups:
+    - name: "Age Range"
+      members_like: "^Age Range_.*"   # if you one-hot later, prevents within-group edges
+
+config:
+  pc_alpha: 0.05
+  fci_alpha: 0.05
+  econml_cv: 5
+  bootstrap: 200
+  max_drivers: 5
+  scm_samples: 1000
+  verbose: true
+
+llm:
+  enabled: true
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  temperature: 0.2
+  api_key_env: "GEMINI_API_KEY"

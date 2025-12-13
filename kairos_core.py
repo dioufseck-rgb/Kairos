@@ -811,37 +811,248 @@ def run_kairos(
         "narrative": text
     }
 
+import yaml
+
+def load_run_spec(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+def apply_types(df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    t = spec.get("types") or {}
+    num = set(t.get("numeric") or [])
+    cat = set(t.get("categorical") or [])
+
+    df = df.copy()
+    for c in df.columns:
+        if c in num:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        elif c in cat:
+            df[c] = df[c].astype("object")
+    return df
+
+import inspect
+
+def build_kairos_config_from_yaml(cfgd: dict) -> KairosConfig:
+    """
+    Build KairosConfig from YAML config dict, ignoring unknown keys safely.
+    Also prints a warning so you notice drift.
+    """
+    allowed = set(inspect.signature(KairosConfig).parameters.keys())
+    filtered = {k: v for k, v in (cfgd or {}).items() if k in allowed}
+    unknown = sorted([k for k in (cfgd or {}).keys() if k not in allowed])
+
+    if unknown:
+        print(f"[Kairos] YAML config keys ignored (not in KairosConfig): {unknown}")
+
+    return KairosConfig(**filtered)
+
 
 # =========================
-# Example usage (your main)
+# YAML Runner
 # =========================
 
-if __name__ == "__main__":
-    df = pd.read_csv("/workspaces/Kairos/synth_kairos.csv")  # replace
+import inspect
+from typing import Optional
+import yaml
 
-    y = "Overall Satisfaction"
 
-    uncontrollable = [
-        "Region", "Customer Segment", "Age Range", "Season", "Distance (Miles)"
-    ]
+def load_run_spec(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+    if not isinstance(spec, dict):
+        raise ValueError(f"Invalid YAML spec (expected dict) in {path}")
+    return spec
 
-    controllable = [
-        "Total Fare Amount",
-        "Communication About Status",
-        "Cleanliness",
-        "Comfort",
-        "Wi-Fi",
-        "Food & Beverage",
-        # You can choose whether to treat these as controllable:
-        "Departure Delay (Minutes)",
-        "Arrival Delay (Minutes)",
-        "On-time Performance",
-        "Staffing Level (Proxy)",
-        "Track Congestion (Proxy)",
-    ]
 
-    explanans = [c for c in df.columns if c != y]
+def apply_types(df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Apply explicit typing from YAML spec:
+      types:
+        numeric: [...]
+        categorical: [...]
+    Any column not listed is left as-is (later steps may infer/encode).
+    """
+    t = spec.get("types") or {}
+    numeric = set(t.get("numeric") or [])
+    categorical = set(t.get("categorical") or [])
 
+    work = df.copy()
+    for c in work.columns:
+        if c in numeric:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+        elif c in categorical:
+            work[c] = work[c].astype("object")
+    return work
+
+
+def preprocess_from_yaml(df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Uses your existing preprocess_for_estimation(df) if present; otherwise
+    does a minimal preprocessing guided by YAML.
+    """
+    pp = spec.get("preprocess", {}) or {}
+    work = df.copy()
+
+    # Optional trim
+    if pp.get("trim_whitespace_in_strings", True):
+        for c in work.columns:
+            if work[c].dtype == "object":
+                work[c] = work[c].astype(str).str.strip()
+
+    # Optional numeric coercion on object columns
+    thr = float(pp.get("coerce_numeric_threshold", 0.90))
+    for c in work.columns:
+        if work[c].dtype == "object":
+            coerced = pd.to_numeric(work[c], errors="coerce")
+            if coerced.notna().mean() >= thr:
+                work[c] = coerced
+
+    # Drop rows with NA (if requested)
+    if pp.get("drop_rows_with_any_na", False):
+        work = work.dropna(axis=0, how="any")
+
+    # If your codebase already has preprocess_for_estimation, prefer it.
+    if "preprocess_for_estimation" in globals() and callable(globals()["preprocess_for_estimation"]):
+        work = globals()["preprocess_for_estimation"](work)
+
+    return work
+
+
+def build_kairos_config_from_yaml(cfgd: Dict[str, Any]) -> KairosConfig:
+    """
+    Build KairosConfig from YAML while ignoring unknown keys safely.
+    Prevents TypeError when YAML contains keys not present in KairosConfig.
+    """
+    allowed = set(inspect.signature(KairosConfig).parameters.keys())
+    cfgd = cfgd or {}
+
+    filtered = {k: cfgd[k] for k in cfgd.keys() if k in allowed}
+    unknown = sorted([k for k in cfgd.keys() if k not in allowed])
+    if unknown:
+        print(f"[Kairos] YAML config keys ignored (not in KairosConfig): {unknown}")
+
+    # Convert basic types where needed (defensive)
+    # Only coerce keys that commonly appear.
+    if "pc_alpha" in filtered:
+        filtered["pc_alpha"] = float(filtered["pc_alpha"])
+    if "fci_alpha" in filtered:
+        filtered["fci_alpha"] = float(filtered["fci_alpha"])
+    if "econml_cv" in filtered:
+        filtered["econml_cv"] = int(filtered["econml_cv"])
+    if "max_drivers" in filtered:
+        filtered["max_drivers"] = int(filtered["max_drivers"])
+    if "scm_samples" in filtered:
+        filtered["scm_samples"] = int(filtered["scm_samples"])
+    if "verbose" in filtered:
+        filtered["verbose"] = bool(filtered["verbose"])
+
+    return KairosConfig(**filtered)
+
+
+def run_from_yaml(spec_path: str) -> Dict[str, Any]:
+    """
+    End-to-end runner:
+      - Load YAML
+      - Load CSV
+      - Apply include/exclude
+      - Apply types + preprocessing
+      - Build KairosConfig from YAML (filtered)
+      - Run causal core (run_kairos)
+      - Optionally generate LLM exec narrative (from YAML llm section)
+
+    Expected YAML keys (minimal):
+      dataset.path
+      target.outcome
+      roles.controllable / roles.uncontrollable
+      config (optional)
+      llm (optional)
+    """
+    spec = load_run_spec(spec_path)
+
+    # ---------------------------
+    # 1) Load dataset
+    # ---------------------------
+    ds = spec.get("dataset") or {}
+    csv_path = ds.get("path")
+    if not csv_path:
+        raise ValueError("YAML missing dataset.path (CSV file path).")
+
+    encoding = ds.get("encoding", "utf-8")
+    df = pd.read_csv(csv_path, encoding=encoding)
+
+    # ---------------------------
+    # 2) Outcome (explanandum)
+    # ---------------------------
+    tgt = spec.get("target") or {}
+    y = tgt.get("outcome")
+    if not y:
+        raise ValueError("YAML missing target.outcome (explanandum).")
+    if y not in df.columns:
+        raise ValueError(f"Outcome '{y}' not found in CSV columns.")
+
+    print(f"[Kairos] Loaded dataset: {csv_path}  rows={len(df)} cols={df.shape[1]}")
+    print(f"[Kairos] Outcome: {y}")
+
+    # ---------------------------
+    # 3) include/exclude columns
+    # ---------------------------
+    cols_spec = spec.get("columns") or {}
+    include = cols_spec.get("include") or []
+    exclude = set(cols_spec.get("exclude") or [])
+
+    if include:
+        missing = [c for c in include if c not in df.columns]
+        if missing:
+            raise ValueError(f"YAML columns.include contains missing columns: {missing}")
+        df = df[include]
+
+    if exclude:
+        df = df[[c for c in df.columns if c not in exclude]]
+
+    if y not in df.columns:
+        raise ValueError("After include/exclude, outcome column is missing. Adjust YAML.")
+
+    # ---------------------------
+    # 4) Apply explicit types + preprocessing
+    # ---------------------------
+    df = apply_types(df, spec)
+    df = preprocess_from_yaml(df, spec)
+
+    print(f"[Kairos] After preprocessing: rows={len(df)} cols={df.shape[1]}")
+
+    # ---------------------------
+    # 5) Roles: explanans, controllable, uncontrollable
+    # ---------------------------
+    roles = spec.get("roles") or {}
+    explanans = roles.get("explanans") or []
+    controllable = roles.get("controllable") or []
+    uncontrollable = roles.get("uncontrollable") or []
+
+    # Infer explanans if not provided
+    if not explanans:
+        explanans = [c for c in df.columns if c != y]
+
+    # Basic validation
+    for name, lst in [("explanans", explanans), ("controllable", controllable), ("uncontrollable", uncontrollable)]:
+        missing = [c for c in lst if c not in df.columns]
+        if missing:
+            raise ValueError(f"YAML roles.{name} contains missing columns: {missing}")
+
+    overlap = set(controllable) & set(uncontrollable)
+    if overlap:
+        raise ValueError(f"Columns cannot be both controllable and uncontrollable: {sorted(list(overlap))}")
+
+    if y in explanans:
+        explanans = [c for c in explanans if c != y]
+
+    # ---------------------------
+    # 6) Build core config from YAML and run
+    # ---------------------------
+    cfgd = spec.get("config") or {}
+    cfg = build_kairos_config_from_yaml(cfgd)
+
+    print(f"[Kairos] Running core with: pc_alpha={getattr(cfg,'pc_alpha',None)} "
+          f"fci_alpha={getattr(cfg,'fci_alpha',None)} max_drivers={getattr(cfg,'max_drivers',None)}")
 
     result = run_kairos(
         df=df,
@@ -849,43 +1060,41 @@ if __name__ == "__main__":
         explanans=explanans,
         controllable=controllable,
         uncontrollable=uncontrollable,
-        cfg=KairosConfig(verbose=True)
+        cfg=cfg,
     )
 
+    # ---------------------------
+    # 7) Optional LLM narrative (from YAML llm section)
+    # ---------------------------
+    llm_spec = spec.get("llm") or {}
+    if llm_spec.get("enabled", False):
+        from kairos_narrative import generate_exec_narrative
+
+        model = llm_spec.get("model", "gemini-2.5-flash")
+        temperature = float(llm_spec.get("temperature", 0.2))
+        max_dr = int(llm_spec.get("max_drivers", getattr(cfg, "max_drivers", 5)))
+
+        print(f"[Kairos] Generating exec narrative via LLM: model={model} temp={temperature} max_drivers={max_dr}")
+        exec_text = generate_exec_narrative(
+            result=result,
+            y=y,
+            max_drivers=max_dr,
+            model=model,
+            temperature=temperature,
+        )
+        result["exec_narrative"] = exec_text
+
+    return result
+
+
+# =========================
+# Example usage (your main)
+# =========================
+
+if __name__ == "__main__":
+    result = run_from_yaml("/workspaces/Kairos/kairos_run.yaml")
     print("\n" + "=" * 80)
-    print(result["narrative"])
-    # print(result["dag_dot"])
-
-    from kairos_viz import make_visual_bundle
-
-
-
-    viz = make_visual_bundle(result, y="Overall Trip Satisfaction")
-    from kairos_viz import render_dot_to_file
-
-    render_dot_to_file(viz["full_dot"], "/workspaces/Kairos/outputs/test_full", fmt="png")
-    render_dot_to_file(viz["abstract_dot"], "/workspaces/Kairos/outputs/test_abs", fmt="png")
-    
-
-    from kairos_narrative import generate_exec_narrative
-
-    exec_narrative = generate_exec_narrative(
-    result=result,
-    y="Overall Trip Satisfaction",
-    max_drivers=3,
-)
-
-    print(exec_narrative)
-    result["exec_narrative"] = exec_narrative
-
-    from narrative import GeminiNarrator, llm_exec_narrative, narrative_json_to_markdown
-
-    narrator = GeminiNarrator(
-    api_key= os.environ.get('GEMINI_KEY'),
-    model="gemini-2.5-flash",   # or your Gemini 3 model name when available in your account
-    temperature=0.2,
-)
-
-    narr_json = llm_exec_narrative(result=result, y="Overall Trip Satisfaction", narrator=narrator)
-    print(narrative_json_to_markdown(narr_json))
-
+    print(result.get("narrative", ""))
+    if "exec_narrative" in result:
+        print("\n" + "=" * 80)
+        print(result["exec_narrative"])

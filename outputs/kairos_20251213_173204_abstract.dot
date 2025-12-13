@@ -1,0 +1,18 @@
+digraph Kairos {
+  rankdir="LR";
+  graph [fontname="Helvetica", fontsize=18, labelloc="t"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled"];
+  edge  [fontname="Helvetica", fontsize=10, arrowsize=0.8];
+  label="Kairos — Abstract Causal Graph (Explanatory Projection)";
+  "Overall Satisfaction" [label="Overall Satisfaction", fillcolor="#FDE68A", penwidth=3.00, width=1.20];
+  "Track Congestion (Proxy)" [label="Track Congestion (Proxy)\nATE=-0.073", fillcolor="#DBEAFE", penwidth=2.20, width=4.00];
+  "Staffing Level (Proxy)" [label="Staffing Level (Proxy)\nATE=0.066", fillcolor="#DBEAFE", penwidth=2.20, width=3.73];
+  "On-time Performance" [label="On-time Performance\nATE=0.030", fillcolor="#DBEAFE", penwidth=2.20, width=2.37];
+  "Communication About Status" [label="Communication About Status\nATE=0.026", fillcolor="#DBEAFE", penwidth=2.20, width=2.22];
+  "Wi-Fi" [label="Wi-Fi\nATE=0.011", fillcolor="#DBEAFE", penwidth=2.20, width=1.62];
+  "Track Congestion (Proxy)" -> "Overall Satisfaction" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Staffing Level (Proxy)" -> "Overall Satisfaction" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "On-time Performance" -> "Overall Satisfaction" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Communication About Status" -> "Overall Satisfaction" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Wi-Fi" -> "Overall Satisfaction" [label="inferred causal path", color="#111827", penwidth=2.20];
+}
