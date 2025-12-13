@@ -881,7 +881,7 @@ if __name__ == "__main__":
     from narrative import GeminiNarrator, llm_exec_narrative, narrative_json_to_markdown
 
     narrator = GeminiNarrator(
-    api_key="AIzaSyAG_-bsAMZH9_kZwEKnI3E1RA8Ipx26R4E",
+    api_key= os.environ.get('GEMINI_API_KEY'),
     model="gemini-2.5-flash",   # or your Gemini 3 model name when available in your account
     temperature=0.2,
 )

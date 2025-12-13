@@ -154,7 +154,7 @@ class GeminiNarrator:
 
     def __init__(
         self,
-        api_key: Optional[str] = "AIzaSyAG_-bsAMZH9_kZwEKnI3E1RA8Ipx26R4E",
+        api_key: Optional[str] = "None",
         model: str = "gemini-2.5-flash",
         temperature: float = 0.2,
         max_output_tokens: int = 1200,
