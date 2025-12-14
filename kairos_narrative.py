@@ -1,17 +1,178 @@
+# kairos_narrative.py
 # =========================
-# Kairos Executive Narrative (LLM-backed, low-hallucination)
-# Gemini API via Google GenAI Python SDK (google-genai)
+# Kairos Executive Narrative (Gemini-backed, hallucination-proof fields)
+# - Chains: LLM must copy top_chain_text verbatim; we inject canonical chain list/text from evidence
+# - Deltas: LLM outputs structured delta_mean/delta_ci; we inject canonical values from evidence
+#           and we render "Δ" ourselves so validation doesn't depend on LLM formatting
 # =========================
 
 from __future__ import annotations
 
-import json
 import os
+import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
-from google import genai
-from google.genai import types
+# Gemini SDK compatibility: supports either "google-genai" (new) or "google-generativeai" (old)
+GENAI_BACKEND = None
+try:
+    from google import genai as genai_new  # pip install google-genai
+    GENAI_BACKEND = "google-genai"
+except Exception:
+    genai_new = None
+
+try:
+    import google.generativeai as genai_old  # pip install google-generativeai
+    if GENAI_BACKEND is None:
+        GENAI_BACKEND = "google-generativeai"
+except Exception:
+    genai_old = None
+
+
+# -------------------------
+# JSON utilities (robust)
+# -------------------------
+
+def _extract_first_json_object(text: str) -> str:
+    """
+    Extract the first top-level {...} JSON object from a response.
+    Handles common wrappers like ```json ... ```
+    """
+    if not text:
+        return ""
+
+    # Strip code fences if present
+    text2 = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE).replace("```", "").strip()
+
+    start = text2.find("{")
+    if start == -1:
+        return ""
+
+    depth = 0
+    for i in range(start, len(text2)):
+        ch = text2[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text2[start : i + 1]
+
+    return text2[start:]
+
+
+def _json_loads_strict(raw: str) -> Dict[str, Any]:
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("Empty JSON string")
+    return json.loads(raw)
+
+
+def _as_float(x: Any) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        return float(x)
+    except Exception:
+        return None
+
+
+def _format_ci(ci: Any, ndigits: int = 3) -> Optional[Tuple[float, float]]:
+    if not isinstance(ci, (list, tuple)) or len(ci) != 2:
+        return None
+    a = _as_float(ci[0])
+    b = _as_float(ci[1])
+    if a is None or b is None:
+        return None
+    return (a, b)
+
+
+# -------------------------
+# Gemini wrapper
+# -------------------------
+
+@dataclass
+class GeminiNarrator:
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+    api_key_env: str = "GEMINI_KEY"
+
+    def __post_init__(self):
+        key = os.getenv(self.api_key_env)
+        if not key:
+            raise RuntimeError(f"Gemini API key env var '{self.api_key_env}' is not set.")
+
+        if GENAI_BACKEND == "google-genai":
+            self.client = genai_new.Client(api_key=key)
+        elif GENAI_BACKEND == "google-generativeai":
+            genai_old.configure(api_key=key)
+            self.client = genai_old.GenerativeModel(self.model)
+        else:
+            raise RuntimeError(
+                "No Gemini SDK found. Install one of:\n"
+                "  pip install google-genai\n"
+                "or\n"
+                "  pip install google-generativeai"
+            )
+
+    def generate_text(self, prompt: str) -> str:
+        if GENAI_BACKEND == "google-genai":
+            resp = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={"temperature": self.temperature},
+            )
+            txt = getattr(resp, "text", None)
+            return txt or str(resp)
+
+        # google-generativeai
+        resp = self.client.generate_content(
+            prompt,
+            generation_config={"temperature": self.temperature},
+        )
+        txt = getattr(resp, "text", None)
+        if txt:
+            return txt
+        try:
+            return resp.candidates[0].content.parts[0].text
+        except Exception:
+            return str(resp)
+
+    def generate_json(self, prompt: str, *, max_repairs: int = 2) -> Dict[str, Any]:
+        raw = self.generate_text(prompt)
+        blob = _extract_first_json_object(raw)
+
+        try:
+            return _json_loads_strict(blob)
+        except Exception as e:
+            last_raw = raw
+            last_err = e
+
+            for _ in range(max_repairs):
+                repair_prompt = f"""
+Return ONLY valid JSON. No markdown. No commentary.
+
+Your previous output was not valid JSON.
+
+PREVIOUS_OUTPUT:
+{last_raw}
+
+Return corrected JSON now:
+"""
+                raw2 = self.generate_text(repair_prompt)
+                blob2 = _extract_first_json_object(raw2)
+                try:
+                    return _json_loads_strict(blob2)
+                except Exception as e2:
+                    last_raw = raw2
+                    last_err = e2
+
+            raise ValueError(
+                "Gemini returned non-JSON after repair attempts.\n"
+                f"Last parse error: {repr(last_err)}\n"
+                f"RAW (truncated):\n{(last_raw or '')[:4000]}"
+            )
 
 
 # -------------------------
@@ -19,329 +180,232 @@ from google.genai import types
 # -------------------------
 
 def build_evidence_packet(result: Dict[str, Any], y: str, max_drivers: int = 5) -> Dict[str, Any]:
-    selected = (result.get("selected_drivers") or [])[:max_drivers]
-    chains = result.get("causal_chains") or {}
-    cfs = result.get("counterfactuals") or {}
-    elim = result.get("eliminated") or {}
-    baseline = result.get("baseline") or {}
+    """
+    Build evidence packet for the LLM.
+    Includes canonical chain + counterfactual deltas for each driver (if available).
+    """
+    selected = result.get("selected_drivers") or []
+    eliminated = result.get("eliminated") or {}
+    counterfactuals = result.get("counterfactuals") or {}
+    causal_chains = result.get("causal_chains") or {}
 
-    drivers: List[Dict[str, Any]] = []
+    allowed: set[str] = {str(y)}
+
     for d in selected:
-        x = d.get("x")
-        if not x:
-            continue
+        allowed.add(str(d.get("x", "")))
+    for k in eliminated.keys():
+        allowed.add(str(k))
 
-        top_chain = (chains.get(x) or [{}])[0] if chains.get(x) else {}
-        drivers.append({
+    # include chain nodes already discovered
+    for x, chains in causal_chains.items():
+        allowed.add(str(x))
+        if isinstance(chains, list):
+            for ch in chains:
+                path = ch.get("chain")
+                if isinstance(path, list):
+                    for node in path:
+                        allowed.add(str(node))
+
+    allowed_variables = sorted(v for v in allowed if v and str(v).strip())
+
+    drivers_out: List[Dict[str, Any]] = []
+    for d in (selected[:max_drivers] if isinstance(selected, list) else []):
+        x = str(d.get("x", ""))
+        ate = d.get("effect", None)
+        ate_units = d.get("ate_units", "per +1σ")
+        rows = d.get("rows_used", d.get("rows", None))
+
+        # best available chain for x
+        chain_info = None
+        chains = causal_chains.get(x) or []
+        if isinstance(chains, list) and len(chains) > 0:
+            chain_info = chains[0]
+
+        if chain_info and isinstance(chain_info.get("chain"), list) and len(chain_info["chain"]) > 0:
+            top_chain = [str(n) for n in chain_info["chain"]]
+            chain_type = str(chain_info.get("type", "unknown"))
+        else:
+            top_chain = [x, str(y)]
+            chain_type = "fallback"
+
+        top_chain_text = " → ".join(top_chain)
+
+        cf = counterfactuals.get(x) or {}
+        delta_mean = cf.get("delta_mean", None) if isinstance(cf, dict) else None
+        delta_ci = cf.get("delta_ci", None) if isinstance(cf, dict) else None
+        cf_err = cf.get("error", None) if isinstance(cf, dict) else None
+        scm_mode = cf.get("mode", cf.get("path_mode", cf.get("scm_mode", None))) if isinstance(cf, dict) else None
+
+        drivers_out.append({
             "x": x,
-            "ate": d.get("effect"),
-            "rows_used": d.get("rows_used"),
-            "confounders_used": d.get("confounders_used") or [],
-            "top_chain": {
-                "chain": top_chain.get("chain", [x, y]),
-                "type": top_chain.get("type", "unknown"),
-                "length": top_chain.get("length"),
-            },
-            "counterfactual": cfs.get(x, {}),
+            "ate": ate,
+            "ate_units": ate_units,
+            "rows_used": rows,
+            "top_chain": top_chain,
+            "top_chain_text": top_chain_text,
+            "chain_type": chain_type,
+            "delta_mean": delta_mean,
+            "delta_ci": delta_ci,
+            "counterfactual_error": cf_err,
+            "scm_mode": scm_mode,
         })
 
-    allowed_vars: Set[str] = set()
-    allowed_vars.add(str(y))
-    for d in drivers:
-        allowed_vars.add(str(d["x"]))
-        for node in d.get("top_chain", {}).get("chain", []) or []:
-            allowed_vars.add(str(node))
-    for k in elim.keys():
-        allowed_vars.add(str(k))
-
-    return {
-        "outcome": y,
-        "baseline": baseline,  # if available: {"y_mean":..., "y_ci":[low,high]}
-        "drivers": drivers,
-        "eliminated": elim,
-        "allowed_variables": sorted(list(allowed_vars)),
-        "policy": {
-            "no_new_variables": True,
-            "no_new_numbers": True,
-            "must_use_only_evidence": True,
+    packet = {
+        "y": str(y),
+        "allowed_variables": allowed_variables,
+        "drivers": drivers_out,
+        "eliminated": {str(k): str(v) for k, v in eliminated.items()},
+        "notes": {
+            "ate_semantics": "ATE is reported in units stated by ate_units; often standardized (per +1σ).",
+            "counterfactual_semantics": "delta_mean/delta_ci represent change in outcome under a realistic intervention, relative to baseline.",
+            "chain_semantics": "top_chain_text is the discovered/derived path to the outcome; copy verbatim in the LLM output.",
         },
     }
+    return packet
 
-
-def compact_evidence_for_llm(evidence: Dict[str, Any], *, max_eliminated: int = 10) -> Dict[str, Any]:
-    """
-    Reduce prompt size to avoid model truncation.
-    Keep only what the narrative needs.
-    """
-    e = dict(evidence)
-
-    # Remove very long lists; we validate post hoc anyway.
-    e.pop("allowed_variables", None)
-    e.pop("policy", None)
-
-    elim = e.get("eliminated") or {}
-    if isinstance(elim, dict) and len(elim) > max_eliminated:
-        keys = list(elim.keys())[:max_eliminated]  # deterministic truncation
-        e["eliminated"] = {k: elim[k] for k in keys}
-
-    # Trim counterfactual payloads
-    for d in (e.get("drivers") or []):
-        cf = d.get("counterfactual")
-        if isinstance(cf, dict) and cf:
-            keep = {}
-            for k in ("delta_mean", "delta_ci", "counterfactual_mean", "counterfactual_ci", "intervention"):
-                if k in cf:
-                    keep[k] = cf[k]
-            d["counterfactual"] = keep
-
-    return e
-
-
-# -------------------------
-# Non-action reason taxonomy
-# -------------------------
 
 def classify_non_action_reason(reason: str) -> str:
     r = (reason or "").lower()
-    if "uncontrollable" in r or "context" in r:
-        return "Uncontrollable context (monitor/segment; don’t optimize)"
-    if "no material" in r or "negligible" in r or "weak" in r:
-        return "Weak/immaterial effect (not worth optimizing)"
-    if "not estim" in r or "identify" in r or "not identifiable" in r:
-        return "Not identifiable with current data (needs experiment or more controls)"
-    if "proxy" in r or "placebo" in r:
-        return "Proxy/placebo risk (optimize upstream levers instead)"
-    if "error" in r or "failed" in r:
-        return "Estimation failed / insufficient statistical support"
-    return "Insufficient evidence (do not act; collect better data)"
+    if "uncontroll" in r:
+        return "uncontrollable_context"
+    if "singular" in r or "matrix" in r:
+        return "data_issue"
+    if "not estimable" in r or "identif" in r:
+        return "weak_identification"
+    if "no material" in r or "no effect" in r:
+        return "weak_effect"
+    return "other"
 
 
 # -------------------------
-# Gemini structured output schema (NO additionalProperties!)
+# Validation + canonical injection
 # -------------------------
-
-def narrative_schema() -> Dict[str, Any]:
-    """
-    Keep schema simple: Gemini response_schema rejects some JSON Schema keywords
-    (e.g., additionalProperties). Enforce strictness via our own validators.
-    """
-    return {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string"},
-            "executive_summary": {"type": "string"},
-            "key_drivers": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "string"},
-                        "ate": {"type": "number"},
-                        "delta_mean": {"type": "number"},
-                        "delta_ci_low": {"type": "number"},
-                        "delta_ci_high": {"type": "number"},
-                        "chain_type": {"type": "string"},
-                        "chain": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["x", "ate", "chain_type", "chain"],
-                },
-            },
-            "do_not_optimize": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "variable": {"type": "string"},
-                        "category": {"type": "string"},
-                        "reason": {"type": "string"},
-                    },
-                    "required": ["variable", "category", "reason"],
-                },
-            },
-            "next_steps": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["title", "executive_summary", "key_drivers", "do_not_optimize", "next_steps"],
-    }
-
-
-# -------------------------
-# Gemini caller (robust JSON handling)
-# -------------------------
-
-class GeminiNarrator:
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash",
-        temperature: float = 0.0,        # deterministic JSON
-        max_output_tokens: int = 2500,   # reduce truncation
-    ):
-        self.api_key = api_key or os.getenv("GEMINI_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key or not str(self.api_key).strip():
-            raise ValueError("Missing Gemini API key. Set GEMINI_API_KEY (recommended) or GOOGLE_API_KEY.")
-
-        self.client = genai.Client(api_key=self.api_key)
-        self.model = model
-        self.temperature = float(temperature)
-        self.max_output_tokens = int(max_output_tokens)
-
-    @staticmethod
-    def _extract_json_object(text: str) -> Optional[str]:
-        """
-        Extract the largest {...} JSON object from a string.
-        If truncated, returns from first '{' to end as fallback.
-        """
-        start = text.find("{")
-        if start == -1:
-            return None
-
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        return text[start:]  # truncated object
-
-    @staticmethod
-    def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
-        try:
-            return json.loads(text)
-        except Exception:
-            pass
-
-        cand = GeminiNarrator._extract_json_object(text)
-        if cand:
-            try:
-                return json.loads(cand)
-            except Exception:
-                return None
-        return None
-
-    def generate_structured(self, prompt: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-        def call(contents: str, temp: float) -> str:
-            resp = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=temp,
-                    max_output_tokens=self.max_output_tokens,
-                    response_mime_type="application/json",
-                    response_schema=schema,
-                ),
-            )
-            raw = (getattr(resp, "text", "") or "").strip()
-            raw = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.IGNORECASE).strip()
-            return raw
-
-        # Attempt 1
-        raw1 = call(prompt, self.temperature)
-        obj = self._try_parse_json(raw1)
-        if obj is not None:
-            return obj
-
-        # Attempt 2: repair (rewrite JSON cleanly)
-        repair_prompt = f"""
-Return ONLY valid JSON matching the schema. No markdown. No commentary.
-Your previous response had invalid or truncated JSON.
-
-PREVIOUS_RESPONSE:
-{raw1}
-"""
-        raw2 = call(repair_prompt, 0.0)
-        obj = self._try_parse_json(raw2)
-        if obj is not None:
-            return obj
-
-        # Attempt 3: salvage — complete the JSON instead of rewriting
-        candidate = self._extract_json_object(raw2) or self._extract_json_object(raw1) or raw2 or raw1
-        complete_prompt = f"""
-You will be given a PARTIAL JSON object that may be truncated.
-Task: OUTPUT a COMPLETE, VALID JSON object matching the schema.
-Do NOT add any new variables or numbers. Preserve keys/values; only fix truncation/escaping.
-
-PARTIAL_JSON:
-{candidate}
-"""
-        raw3 = call(complete_prompt, 0.0)
-        obj = self._try_parse_json(raw3)
-        if obj is not None:
-            return obj
-
-        raise ValueError(
-            "Gemini returned non-JSON after 3 attempts.\n"
-            f"RAW1:\n{raw1[:2000]}\n\nRAW2:\n{raw2[:2000]}\n\nRAW3:\n{raw3[:2000]}"
-        )
-
-
-# -------------------------
-# Validation + Guardrails (anti-hallucination)
-# -------------------------
-
-def _collect_allowed_variables(evidence: Dict[str, Any]) -> Set[str]:
-    return {str(a) for a in (evidence.get("allowed_variables") or [])}
-
 
 def validate_narrative_json(narr: Dict[str, Any], evidence: Dict[str, Any]) -> Tuple[bool, List[str]]:
     issues: List[str] = []
-    allowed = _collect_allowed_variables(evidence)
+    allowed = set(evidence.get("allowed_variables") or [])
+    eliminated = set((evidence.get("eliminated") or {}).keys())
 
-    for i, kd in enumerate(narr.get("key_drivers") or []):
-        x = str(kd.get("x"))
-        if x not in allowed:
-            issues.append(f"key_drivers[{i}].x='{x}' not in allowed_variables.")
-        for node in (kd.get("chain") or []):
-            if str(node) not in allowed:
-                issues.append(f"key_drivers[{i}].chain node '{node}' not in allowed_variables.")
+    if not isinstance(narr, dict):
+        return False, ["Narrative JSON is not an object"]
 
-    for i, item in enumerate(narr.get("do_not_optimize") or []):
-        v = str(item.get("variable"))
-        if v not in allowed:
-            issues.append(f"do_not_optimize[{i}].variable='{v}' not in allowed_variables.")
+    for k in ["title", "executive_summary", "key_drivers", "do_not_optimize", "next_steps"]:
+        if k not in narr:
+            issues.append(f"Missing required field '{k}'")
+
+    kds = narr.get("key_drivers")
+    if not isinstance(kds, list):
+        issues.append("key_drivers must be a list")
+    else:
+        for i, kd in enumerate(kds):
+            if not isinstance(kd, dict):
+                issues.append(f"key_drivers[{i}] must be an object")
+                continue
+
+            var = kd.get("variable")
+            if var not in allowed:
+                issues.append(f"key_drivers[{i}].variable='{var}' not in allowed_variables.")
+
+            ct = kd.get("chain_text")
+            if not isinstance(ct, str) or not ct.strip():
+                issues.append(f"key_drivers[{i}].chain_text missing/empty")
+            else:
+                ev = None
+                for d in evidence.get("drivers") or []:
+                    if d.get("x") == var:
+                        ev = d
+                        break
+                if ev is not None:
+                    expected = ev.get("top_chain_text")
+                    if expected and ct.strip() != str(expected).strip():
+                        issues.append(
+                            f"key_drivers[{i}].chain_text must exactly match evidence top_chain_text for '{var}'."
+                        )
+
+            wi = kd.get("what_if")
+            required_phrase = "If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected"
+            if not isinstance(wi, str) or required_phrase not in wi:
+                issues.append(f"key_drivers[{i}].what_if missing required framing language")
+
+            # Structured delta fields
+            if "counterfactual_available" not in kd:
+                issues.append(f"key_drivers[{i}].counterfactual_available missing")
+            else:
+                avail = kd.get("counterfactual_available")
+                if not isinstance(avail, bool):
+                    issues.append(f"key_drivers[{i}].counterfactual_available must be boolean")
+                elif avail is True:
+                    dm = kd.get("delta_mean", None)
+                    dci = kd.get("delta_ci", None)
+                    if _as_float(dm) is None:
+                        issues.append(f"key_drivers[{i}].delta_mean must be a number when counterfactual_available=true")
+                    if not isinstance(dci, list) or len(dci) != 2 or _as_float(dci[0]) is None or _as_float(dci[1]) is None:
+                        issues.append(f"key_drivers[{i}].delta_ci must be [low, high] numbers when counterfactual_available=true")
+
+    dno = narr.get("do_not_optimize")
+    if not isinstance(dno, list):
+        issues.append("do_not_optimize must be a list")
+    else:
+        for i, item in enumerate(dno):
+            if not isinstance(item, dict):
+                issues.append(f"do_not_optimize[{i}] must be an object")
+                continue
+            var = item.get("variable")
+            if var not in allowed:
+                issues.append(f"do_not_optimize[{i}].variable='{var}' not in allowed_variables.")
+            if eliminated and var not in eliminated:
+                issues.append(f"do_not_optimize[{i}].variable='{var}' must come from eliminated variables only.")
+            cat = item.get("category")
+            if cat not in {"uncontrollable_context", "data_issue", "weak_identification", "weak_effect", "other"}:
+                issues.append(f"do_not_optimize[{i}].category invalid")
+
+    ns = narr.get("next_steps")
+    if not isinstance(ns, list) or not all(isinstance(x, str) for x in ns):
+        issues.append("next_steps must be a list of strings")
 
     return (len(issues) == 0), issues
 
 
-def sanitize_do_not_optimize(
-    narr: Dict[str, Any],
-    allowed: Set[str],
-    do_not_seed: List[Dict[str, str]],
-    *,
-    max_items: int = 8
-) -> Tuple[Dict[str, Any], List[str]]:
+def inject_canonical_fields(narr: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Remove invented do_not_optimize variables and replace with evidence-seeded ones.
-    Returns (narr, fixes_applied).
+    Overwrite canonical chain + delta fields from evidence (hallucination-proof).
     """
-    fixes: List[str] = []
-    cleaned: List[Dict[str, Any]] = []
+    ev_by_x = {d["x"]: d for d in (evidence.get("drivers") or []) if isinstance(d, dict) and d.get("x")}
 
-    for item in (narr.get("do_not_optimize") or []):
-        v = str(item.get("variable", "")).strip()
-        if v in allowed:
-            cleaned.append(item)
-        else:
-            fixes.append(f"Removed invented do_not_optimize variable: '{v}'")
+    kds = narr.get("key_drivers") or []
+    if isinstance(kds, list):
+        for kd in kds:
+            if not isinstance(kd, dict):
+                continue
+            x = kd.get("variable")
+            ev = ev_by_x.get(x)
+            if not ev:
+                continue
 
-    if not cleaned:
-        cleaned = [d for d in do_not_seed if d["variable"] in allowed][:max_items]
-        fixes.append("Replaced do_not_optimize with evidence-seeded list (model invented variables).")
-    else:
-        cleaned = cleaned[:max_items]
-        existing = {str(x.get("variable")) for x in cleaned}
-        for d in do_not_seed:
-            if d["variable"] in allowed and d["variable"] not in existing and len(cleaned) < max_items:
-                cleaned.append(d)
-                existing.add(d["variable"])
+            # canonical chain
+            kd["chain"] = ev.get("top_chain")
+            kd["chain_text"] = ev.get("top_chain_text")
+            kd["chain_type"] = ev.get("chain_type")
+            kd["scm_mode"] = ev.get("scm_mode")
 
-    narr["do_not_optimize"] = cleaned
-    return narr, fixes
+            # canonical delta fields
+            dm = ev.get("delta_mean", None)
+            dci = ev.get("delta_ci", None)
+            ok_ci = _format_ci(dci) is not None
+            ok_dm = _as_float(dm) is not None
+            kd["delta_mean"] = dm if ok_dm else None
+            kd["delta_ci"] = dci if ok_ci else [None, None]
+            kd["counterfactual_available"] = bool(ok_dm and ok_ci and not ev.get("counterfactual_error"))
+
+            # carry error if any
+            if ev.get("counterfactual_error"):
+                kd["counterfactual_error"] = ev.get("counterfactual_error")
+
+    return narr
 
 
 # -------------------------
-# Main LLM narrative builder
+# LLM Prompt + Orchestration
 # -------------------------
 
 def llm_exec_narrative(
@@ -351,7 +415,6 @@ def llm_exec_narrative(
     max_drivers: int = 5,
 ) -> Dict[str, Any]:
     evidence = build_evidence_packet(result, y=y, max_drivers=max_drivers)
-    allowed = _collect_allowed_variables(evidence)
 
     eliminated = evidence.get("eliminated") or {}
     do_not_seed = [{
@@ -360,115 +423,182 @@ def llm_exec_narrative(
         "reason": str(reason),
     } for var, reason in eliminated.items()]
 
-    do_not_vars = [d["variable"] for d in do_not_seed]
-    evidence_compact = compact_evidence_for_llm(evidence, max_eliminated=10)
-
     prompt = f"""
-You are Kairos, an executive explanation writer.
+You are Kairos, an executive explanation writer for causal findings.
 
-HARD RULES:
-- Output MUST be a single valid JSON object (no markdown, no commentary).
-- Use ONLY variables from the evidence. Do NOT invent variable names.
-- For do_not_optimize.variable, you MUST choose ONLY from DO_NOT_VARIABLES (closed set).
-- Do NOT introduce new numbers (only reuse numbers present in evidence).
-- Do NOT invent causal mechanisms; use only top_chain provided for each driver.
-- Keep it concise.
+HARD RULES (NON-NEGOTIABLE)
+1) Use ONLY variables in allowed_variables.
+2) Use ONLY numbers that appear in the EVIDENCE JSON (ATEs, delta_mean, delta_ci, rows).
+3) Do NOT invent causal mechanisms. ONLY describe pathways using the provided top_chain_text.
+4) For EACH driver, you MUST copy the driver’s "top_chain_text" EXACTLY into "chain_text". No edits. No extra nodes.
+5) Counterfactual framing MUST use this exact language (verbatim):
+   "If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected {y} change, given the discovered causal structure?"
+6) Counterfactual output MUST be structured:
+   - delta_mean: number or null (copy evidence delta_mean)
+   - delta_ci: [low, high] numbers or [null, null] (copy evidence delta_ci)
+   - counterfactual_available: boolean (true only if evidence has valid delta_mean and delta_ci and no counterfactual_error)
+   Do NOT output a text delta summary.
+7) Include "What not to optimize (and why)" grounded ONLY in eliminated variables using DO_NOT_OPTIMIZE_SEED.
+   Do NOT introduce new eliminated variables.
 
-FORMAT LIMITS:
-- executive_summary: <= 90 words
-- key_drivers: <= {max_drivers} items
-- next_steps: 3 to 5 bullets, each <= 18 words
-- do_not_optimize: <= 8 items, each reason <= 22 words
+OUTPUT FORMAT
+Return VALID JSON ONLY (no markdown, no commentary) with this structure:
 
-DO_NOT_VARIABLES (closed set):
-{json.dumps(do_not_vars, ensure_ascii=False)}
+{{
+  "title": "string",
+  "executive_summary": "string",
+  "key_drivers": [
+    {{
+      "variable": "one of allowed_variables",
+      "ate_summary": "string (include ATE from evidence; do not invent numbers)",
+      "what_if": "string (must include the required counterfactual framing sentence verbatim)",
+      "delta_mean": "number or null",
+      "delta_ci": ["number or null", "number or null"],
+      "counterfactual_available": "boolean",
+      "chain_text": "string (MUST match evidence top_chain_text exactly)",
+      "uncertainty_notes": "string (mention uncertainty; if scm_mode indicates salvaged/local/undirected, say direction not uniquely identified)"
+    }}
+  ],
+  "do_not_optimize": [
+    {{
+      "variable": "must come from eliminated variables only",
+      "category": "one of: uncontrollable_context | data_issue | weak_identification | weak_effect | other",
+      "reason": "string (must match eliminated reason; no invented reasons)"
+    }}
+  ],
+  "next_steps": ["string", "string", "..."]
+}}
 
 EVIDENCE (JSON):
-{json.dumps(evidence_compact, ensure_ascii=False)}
+{json.dumps(evidence, ensure_ascii=False)}
+
+DO_NOT_OPTIMIZE_SEED (JSON):
+{json.dumps(do_not_seed, ensure_ascii=False)}
 """
 
-    narr = narrator.generate_structured(prompt=prompt, schema=narrative_schema())
-    narr, _ = sanitize_do_not_optimize(narr, allowed, do_not_seed)
+    narr = narrator.generate_json(prompt)
 
     ok, issues = validate_narrative_json(narr, evidence)
     if not ok:
         repair_prompt = f"""
-Fix ONLY these violations. Do not add any new variables.
-For do_not_optimize, you MUST choose variables ONLY from DO_NOT_VARIABLES.
-Return ONLY a single JSON object. No markdown.
-
-DO_NOT_VARIABLES:
-{json.dumps(do_not_vars, ensure_ascii=False)}
+Fix ONLY these violations. Do not add any new variables. Return VALID JSON ONLY.
 
 VIOLATIONS:
 {json.dumps(issues, ensure_ascii=False, indent=2)}
 
 EVIDENCE (JSON):
-{json.dumps(evidence_compact, ensure_ascii=False)}
+{json.dumps(evidence, ensure_ascii=False)}
 
 PREVIOUS_JSON:
 {json.dumps(narr, ensure_ascii=False)}
 """
-        narr = narrator.generate_structured(prompt=repair_prompt, schema=narrative_schema())
-        narr, _ = sanitize_do_not_optimize(narr, allowed, do_not_seed)
-
-        ok2, issues2 = validate_narrative_json(narr, evidence)
+        narr2 = narrator.generate_json(repair_prompt)
+        ok2, issues2 = validate_narrative_json(narr2, evidence)
         if not ok2:
-            # deterministic fallback: replace do_not_optimize with seed
-            narr["do_not_optimize"] = [d for d in do_not_seed if d["variable"] in allowed][:8]
-            ok3, issues3 = validate_narrative_json(narr, evidence)
-            if not ok3:
-                raise ValueError("Narrative validation failed after repair:\n" + "\n".join(issues3))
+            raise ValueError("Narrative validation failed after repair:\n" + "\n".join(issues2))
+        narr = narr2
 
+    # Overwrite canonical chain + deltas from evidence (hallucination-proof)
+    narr = inject_canonical_fields(narr, evidence)
     return narr
 
 
-def narrative_json_to_markdown(narr: Dict[str, Any]) -> str:
+# -------------------------
+# Public API: render executive narrative text
+# -------------------------
+
+def render_exec_narrative_text(narr_json: Dict[str, Any], y: str) -> str:
+    """
+    Turn the narrative JSON into the readable exec report text.
+    This is where we render "Δ" consistently (not dependent on LLM formatting).
+    """
+    title = narr_json.get("title", f"Causal Analysis Report: {y}")
+    summary = (narr_json.get("executive_summary") or "").strip()
+    key_drivers = narr_json.get("key_drivers") or []
+    dno = narr_json.get("do_not_optimize") or []
+    steps = narr_json.get("next_steps") or []
+
     lines: List[str] = []
-    lines.append(f"## {narr.get('title', 'Executive Narrative')}")
+    lines.append(f"## {title}")
     lines.append("")
-    lines.append((narr.get("executive_summary") or "").strip())
-    lines.append("")
+    if summary:
+        lines.append(summary)
+        lines.append("")
 
     lines.append("### Key causal drivers")
-    for kd in (narr.get("key_drivers") or []):
-        x = kd.get("x", "")
-        ate = float(kd.get("ate", 0.0))
-        chain_type = kd.get("chain_type", "unknown")
-        chain = " → ".join(kd.get("chain") or [])
+    if not key_drivers:
+        lines.append("- None identified.")
+    else:
+        for kd in key_drivers:
+            var = kd.get("variable", "")
+            ate = (kd.get("ate_summary") or "").strip()
+            wi = (kd.get("what_if") or "").strip()
+            ct = (kd.get("chain_text") or "").strip()
+            un = (kd.get("uncertainty_notes") or "").strip()
 
-        if all(k in kd for k in ("delta_mean", "delta_ci_low", "delta_ci_high")):
-            lines.append(
-                f"- **{x}** (ATE {ate:+.3f}) | What-if: Δ ≈ {float(kd['delta_mean']):+.3f} "
-                f"(CI {float(kd['delta_ci_low']):+.3f}..{float(kd['delta_ci_high']):+.3f})"
-            )
-        else:
-            lines.append(f"- **{x}** (ATE {ate:+.3f})")
+            # structured deltas
+            avail = bool(kd.get("counterfactual_available", False))
+            dm = kd.get("delta_mean", None)
+            dci = kd.get("delta_ci", None)
 
-        lines.append(f"  - Chain ({chain_type}): {chain}")
+            lines.append(f"- **{var}** — {ate}".strip())
+
+            if wi:
+                lines.append(f"  - {wi}")
+
+            if avail and _as_float(dm) is not None and _format_ci(dci) is not None:
+                dm_f = float(dm)
+                ci_low, ci_high = _format_ci(dci)  # type: ignore[misc]
+                lines.append(f"  - What-if: Δ ≈ {dm_f:+.3f} (CI {ci_low:+.3f}..{ci_high:+.3f})")
+            else:
+                err = kd.get("counterfactual_error")
+                if err:
+                    lines.append(f"  - What-if: counterfactual not available ({err})")
+                else:
+                    lines.append("  - What-if: counterfactual not available")
+
+            if ct:
+                lines.append(f"  - Chain: {ct}")
+
+            if un:
+                lines.append(f"  - Notes: {un}")
 
     lines.append("")
     lines.append("### What not to optimize (and why)")
-    for item in (narr.get("do_not_optimize") or []):
-        lines.append(f"- **{item['variable']}** — {item['category']}. {item['reason']}")
+    if not dno:
+        lines.append("- None.")
+    else:
+        for item in dno:
+            v = item.get("variable", "")
+            cat = item.get("category", "")
+            reason = item.get("reason", "")
+            lines.append(f"- **{v}** — {cat}. {reason}".strip())
 
     lines.append("")
     lines.append("### Next steps")
-    for s in (narr.get("next_steps") or []):
-        lines.append(f"- {s}")
+    if not steps:
+        lines.append("- Define validation experiments and monitoring for selected drivers.")
+    else:
+        for s in steps:
+            s2 = str(s).strip()
+            if s2:
+                lines.append(f"- {s2}")
 
-    return "\n".join(lines)
+    return "\n".join(lines).strip()
 
 
-# Backward-compatible entry point used by kairos_core.py
 def generate_exec_narrative(
     result: Dict[str, Any],
     y: str,
-    max_drivers: int = 3,
-    *,
+    max_drivers: int = 5,
     model: str = "gemini-2.5-flash",
-    temperature: float = 0.0,
+    temperature: float = 0.2,
+    api_key_env: str = "GEMINI_KEY",
 ) -> str:
-    narrator = GeminiNarrator(model=model, temperature=temperature, max_output_tokens=2500)
+    """
+    Main function called from kairos_core.py.
+    Returns a formatted executive narrative (text).
+    """
+    narrator = GeminiNarrator(model=model, temperature=temperature, api_key_env=api_key_env)
     narr_json = llm_exec_narrative(result=result, y=y, narrator=narrator, max_drivers=max_drivers)
-    return narrative_json_to_markdown(narr_json)
+    return render_exec_narrative_text(narr_json=narr_json, y=y)

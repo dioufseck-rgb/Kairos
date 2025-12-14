@@ -1,0 +1,18 @@
+digraph Kairos {
+  rankdir="LR";
+  graph [fontname="Helvetica", fontsize=18, labelloc="t"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled"];
+  edge  [fontname="Helvetica", fontsize=10, arrowsize=0.8];
+  label="Kairos — Abstract Causal Graph (Explanatory Projection)";
+  "Unplanned Downtime Hours (Next 30d)" [label="Unplanned Downtime Hours (Next 30d)", fillcolor="#FDE68A", penwidth=3.00, width=1.20];
+  "Spare Parts Availability Index" [label="Spare Parts Availability Index\nATE=-2.116", fillcolor="#DBEAFE", penwidth=2.20, width=4.00];
+  "Maintenance Quality Index" [label="Maintenance Quality Index\nATE=-2.021", fillcolor="#DBEAFE", penwidth=2.20, width=3.87];
+  "Lubrication Interval (Days)" [label="Lubrication Interval (Days)\nATE=0.417", fillcolor="#DBEAFE", penwidth=2.20, width=1.75];
+  "Production Target Pressure Index" [label="Production Target Pressure Index\nATE=1.656", fillcolor="#DBEAFE", penwidth=2.20, width=3.39];
+  "Operator Training Hours (Monthly)" [label="Operator Training Hours (Monthly)\nATE=-0.131", fillcolor="#DBEAFE", penwidth=2.20, width=1.37];
+  "Spare Parts Availability Index" -> "Unplanned Downtime Hours (Next 30d)" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Maintenance Quality Index" -> "Unplanned Downtime Hours (Next 30d)" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Lubrication Interval (Days)" -> "Unplanned Downtime Hours (Next 30d)" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Production Target Pressure Index" -> "Unplanned Downtime Hours (Next 30d)" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "Operator Training Hours (Monthly)" -> "Unplanned Downtime Hours (Next 30d)" [label="inferred causal path", color="#111827", penwidth=2.20];
+}

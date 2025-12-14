@@ -1,0 +1,12 @@
+digraph Kairos {
+  rankdir="LR";
+  graph [fontname="Helvetica", fontsize=18, labelloc="t"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled"];
+  edge  [fontname="Helvetica", fontsize=10, arrowsize=0.8];
+  label="Kairos — Abstract Causal Graph (Explanatory Projection)";
+  "RUL" [label="RUL", fillcolor="#FDE68A", penwidth=3.00, width=1.20];
+  "op_setting_2" [label="op_setting_2\nATE=-5444.712", fillcolor="#DBEAFE", penwidth=2.20, width=4.00];
+  "op_setting_1" [label="op_setting_1\nATE=191.425", fillcolor="#DBEAFE", penwidth=2.20, width=1.30];
+  "op_setting_2" -> "RUL" [label="difference-making (effect-based)", color="#111827", penwidth=2.20];
+  "op_setting_1" -> "RUL" [label="difference-making (effect-based)", color="#111827", penwidth=2.20];
+}

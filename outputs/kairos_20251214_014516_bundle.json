@@ -1,0 +1,243 @@
+{
+  "y": "Unplanned Downtime Hours (Next 30d)",
+  "selected_drivers": [
+    {
+      "x": "Spare Parts Availability Index",
+      "effect": -2.115613592697025,
+      "treatment_std": 0.9988959746913547,
+      "effect_per_1sd": -2.1132779017473733,
+      "estimand": "No directed path from ['Spare Parts Availability Index'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Maintenance Quality Index",
+      "effect": -2.0207425134459656,
+      "treatment_std": 0.9945244534790328,
+      "effect_per_1sd": -2.009677843806696,
+      "estimand": "No directed path from ['Maintenance Quality Index'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Lubrication Interval (Days)",
+      "effect": 0.4169077257690758,
+      "treatment_std": 3.9813193572470253,
+      "effect_per_1sd": 1.659842798790256,
+      "estimand": "No directed path from ['Lubrication Interval (Days)'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Production Target Pressure Index",
+      "effect": 1.6558936614276527,
+      "treatment_std": 1.0014512950131007,
+      "effect_per_1sd": 1.6582968516407077,
+      "estimand": "No directed path from ['Production Target Pressure Index'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    },
+    {
+      "x": "Operator Training Hours (Monthly)",
+      "effect": -0.13147276580368333,
+      "treatment_std": 2.895676750376269,
+      "effect_per_1sd": -0.38070263124539,
+      "estimand": "No directed path from ['Operator Training Hours (Monthly)'] to ['Unplanned Downtime Hours (Next 30d)'] in the causal graph.\nCausal effect is zero.",
+      "method": "DoWhy identify + EconML LinearDML (W=confounders, X=None)",
+      "confounders_used": [],
+      "treatment_mapping": null,
+      "rows_used": 3727
+    }
+  ],
+  "counterfactuals": {
+    "Spare Parts Availability Index": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Spare Parts Availability Index": 0.7093000388241542
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Maintenance Quality Index": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Maintenance Quality Index": 0.6499646693835515
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Lubrication Interval (Days)": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Lubrication Interval (Days)": 16.69073724780197
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Production Target Pressure Index": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Production Target Pressure Index": 0.7080510320321627
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    },
+    "Operator Training Hours (Monthly)": {
+      "counterfactual_mean": 24.394651364795152,
+      "counterfactual_ci": [
+        11.740948249360583,
+        36.70269575167573
+      ],
+      "interventions": {
+        "Operator Training Hours (Monthly)": 7.875681857138133
+      },
+      "rows_used_for_scm": 3727,
+      "scm_nodes": [
+        "Unplanned Downtime Hours (Next 30d)",
+        "Ambient Temperature (C)",
+        "Humidity (%)",
+        "Machine Age (Years)",
+        "Maintenance Quality Index",
+        "Lubrication Interval (Days)",
+        "Operator Training Hours (Monthly)",
+        "Spare Parts Availability Index",
+        "Production Target Pressure Index",
+        "Fatigue Index",
+        "Procedure Compliance Index",
+        "Wear Index",
+        "Cooling Efficiency Index",
+        "Vibration RMS",
+        "Defect Rate Index",
+        "Failure Risk (0-1)",
+        "Repair Duration (Hours)"
+      ],
+      "delta_mean": -0.3942377278478446,
+      "delta_ci": [
+        -13.047940843282413,
+        11.913806659032737
+      ],
+      "baseline_y_mean": 24.788889092642997
+    }
+  },
+  "causal_chains": {}
+}

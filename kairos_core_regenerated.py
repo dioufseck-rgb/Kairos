@@ -1,11 +1,10 @@
 # =========================
-# Kairos Core (PC+FCI + DoWhy + EconML + SCM + YAML runner)
-#   - Adds "causal-path salvage" for SCM when discovery doesn't orient a directed path to Y
-#   - Adds cycle-breaking that protects edges into the outcome (and along X→Y paths)
+# Kairos Core (PC+FCI + DoWhy + EconML + Driver-Specific SCM + YAML runner)
 # =========================
 
 from __future__ import annotations
 
+import os
 import json
 import time
 import inspect
@@ -15,6 +14,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 import networkx as nx
+
 import yaml
 
 from causallearn.search.ConstraintBased.PC import pc
@@ -30,12 +30,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-import os
 
-
-# =========================
-# Logging helpers
-# =========================
 
 def kprint(msg: str) -> None:
     print(f"[Kairos] {msg}", flush=True)
@@ -60,10 +55,6 @@ class stage:
         return False
 
 
-# =========================
-# Config
-# =========================
-
 @dataclass
 class KairosConfig:
     # discovery
@@ -86,18 +77,13 @@ class KairosConfig:
     scm_samples: int = 1000
     min_rows_scm: int = 80
 
-    # if discovery doesn't give a directed X→Y path, try to salvage a plausible local
-    # direction by orienting an undirected shortest path toward Y.
-    salvage_scm_path: bool = True
-    salvage_max_path_len: int = 6
-
     # misc
     verbose: bool = True
 
 
-# =========================
+# -------------------------
 # Preprocessing
-# =========================
+# -------------------------
 
 def preprocess_for_estimation(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
@@ -138,9 +124,9 @@ def encode_covariates(df: pd.DataFrame, cols: List[str]) -> Tuple[np.ndarray, Li
     return np.asarray(X, dtype=float), feature_names
 
 
-# =========================
+# -------------------------
 # Discovery-safe numeric frame (Fisher-Z needs non-singular corr)
-# =========================
+# -------------------------
 
 def discovery_ready_frame(
     df: pd.DataFrame,
@@ -267,37 +253,7 @@ def discover_pc_fci(df: pd.DataFrame, cols: List[str], cfg: KairosConfig) -> Tup
     return edges, disc_info
 
 
-# =========================
-# DAG building with safer cycle breaking
-#   We try to preserve edges into y and edges on any (undirected) x~y corridor.
-# =========================
-
-def _corridor_edges_to_outcome(G: nx.DiGraph, outcome: str) -> Set[Tuple[str, str]]:
-    if outcome not in G:
-        return set()
-    U = G.to_undirected()
-    corridor: Set[Tuple[str, str]] = set()
-    # mark all edges incident to outcome (both directions) + edges on shortest paths to outcome
-    for n in G.nodes:
-        if n == outcome:
-            continue
-        if n in U and outcome in U and nx.has_path(U, n, outcome):
-            try:
-                p = nx.shortest_path(U, n, outcome)
-                for a, b in zip(p[:-1], p[1:]):
-                    corridor.add((a, b))
-                    corridor.add((b, a))
-            except Exception:
-                pass
-    # also preserve direct incident edges
-    for u in list(G.predecessors(outcome)):
-        corridor.add((u, outcome))
-    for v in list(G.successors(outcome)):
-        corridor.add((outcome, v))
-    return corridor
-
-
-def build_dag(edges: List[Tuple[str, str, str]], cols: List[str], *, outcome: str) -> nx.DiGraph:
+def build_dag(edges: List[Tuple[str, str, str]], cols: List[str]) -> nx.DiGraph:
     G = nx.DiGraph()
     G.add_nodes_from(cols)
     for a, b, src in edges:
@@ -310,41 +266,18 @@ def build_dag(edges: List[Tuple[str, str, str]], cols: List[str], *, outcome: st
             if src not in cur.split(","):
                 G[a][b]["source"] = (cur + "," + src).strip(",")
 
-    corridor = _corridor_edges_to_outcome(G, outcome)
-
-    # break cycles conservatively, trying NOT to remove corridor edges
-    # if forced, remove the first non-corridor edge in the cycle, else remove an edge not incident to outcome.
     while True:
         try:
             cyc = nx.find_cycle(G)
+            G.remove_edge(*cyc[0])
         except Exception:
             break
-
-        removed = False
-        for (u, v) in cyc:
-            if (u, v) not in corridor and v != outcome and u != outcome:
-                G.remove_edge(u, v)
-                removed = True
-                break
-        if removed:
-            continue
-
-        for (u, v) in cyc:
-            if v != outcome and u != outcome:
-                G.remove_edge(u, v)
-                removed = True
-                break
-
-        if not removed:
-            # last resort
-            G.remove_edge(*cyc[0])
-
     return G
 
 
-# =========================
+# -------------------------
 # DoWhy + EconML effect estimation
-# =========================
+# -------------------------
 
 def estimate_effect(df: pd.DataFrame, dag: nx.DiGraph, x: str, y: str, confounders: List[str], cfg: KairosConfig) -> Dict[str, Any]:
     if len(df) < int(cfg.min_rows_estimation):
@@ -390,9 +323,9 @@ def estimate_effect(df: pd.DataFrame, dag: nx.DiGraph, x: str, y: str, confounde
     }
 
 
-# =========================
+# -------------------------
 # Difference-making filter
-# =========================
+# -------------------------
 
 def difference_making(effects: List[Dict[str, Any]], controllable: Set[str], cfg: KairosConfig) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     supported: List[Dict[str, Any]] = []
@@ -438,22 +371,13 @@ def extract_causal_chains(dag: nx.DiGraph, drivers: List[Dict[str, Any]], y: str
                 path = path[:max_len-1] + [y]
             chains[x] = [{"chain": path, "type": "directed_shortest"}]
         except Exception:
-            # fallback to undirected shortest path
-            try:
-                U = dag.to_undirected()
-                p = nx.shortest_path(U, source=x, target=y)
-                if len(p) > max_len:
-                    p = p[:max_len-1] + [y]
-                chains[x] = [{"chain": p, "type": "undirected_shortest"}]
-            except Exception:
-                chains[x] = [{"chain": [x, y], "type": "fallback"}]
+            chains[x] = [{"chain": [x, y], "type": "fallback"}]
     return chains
 
 
-# =========================
-# SCM counterfactuals
-#   If no directed path exists, optionally salvage by orienting an undirected shortest path toward Y.
-# =========================
+# -------------------------
+# SCM counterfactuals (driver-specific!)
+# -------------------------
 
 def propose_intervention_value(df: pd.DataFrame, x: str) -> Optional[float]:
     s = pd.to_numeric(df[x], errors="coerce").dropna()
@@ -464,6 +388,14 @@ def propose_intervention_value(df: pd.DataFrame, x: str) -> Optional[float]:
     if abs(q75 - q50) < 1e-9:
         return None
     return q75
+
+
+def scm_subgraph_for_driver(dag: nx.DiGraph, x: str, y: str) -> Optional[nx.DiGraph]:
+    if x not in dag or y not in dag:
+        return None
+    nodes = set(nx.descendants(dag, x)) | {x, y}
+    nodes |= set(dag.predecessors(y))  # stabilize Y mechanism
+    return dag.subgraph(nodes).copy()
 
 
 def _const_intervention(v: float):
@@ -479,45 +411,6 @@ def gcm_interventional_samples_compat(scm: StructuralCausalModel, interventions:
     return interventional_samples(scm, interventions=interventions)
 
 
-def _salvage_local_path_dag(dag: nx.DiGraph, x: str, y: str, max_len: int) -> Optional[nx.DiGraph]:
-    # Build a tiny DAG by orienting an undirected shortest path x~...~y toward y.
-    if x not in dag or y not in dag:
-        return None
-    U = dag.to_undirected()
-    if not nx.has_path(U, x, y):
-        return None
-    p = nx.shortest_path(U, x, y)
-    if len(p) > max_len:
-        return None
-
-    H = nx.DiGraph()
-    H.add_nodes_from(p)
-    for a, b in zip(p[:-1], p[1:]):
-        H.add_edge(a, b, source="salvaged_path")
-    # Add direct parents of y from original dag if present on path nodes (helps model y)
-    for u in dag.predecessors(y):
-        if u in H and u != y:
-            H.add_edge(u, y, source="salvaged_parent")
-    return H
-
-
-def scm_subgraph_for_driver(dag: nx.DiGraph, x: str, y: str, cfg: KairosConfig) -> Optional[nx.DiGraph]:
-    if x not in dag or y not in dag:
-        return None
-
-    if nx.has_path(dag, x, y):
-        nodes = set(nx.descendants(dag, x)) | {x, y}
-        nodes |= set(dag.predecessors(y))
-        return dag.subgraph(nodes).copy()
-
-    if cfg.salvage_scm_path:
-        salv = _salvage_local_path_dag(dag, x, y, max_len=int(cfg.salvage_max_path_len))
-        if salv is not None:
-            return salv
-
-    return None
-
-
 def build_and_sample_scm_driver_specific(
     df: pd.DataFrame,
     dag: nx.DiGraph,
@@ -526,9 +419,12 @@ def build_and_sample_scm_driver_specific(
     intervention_value: float,
     cfg: KairosConfig
 ) -> Dict[str, Any]:
-    subdag = scm_subgraph_for_driver(dag, x, y, cfg)
+    if not nx.has_path(dag, x, y):
+        return {"error": "No directed causal path to outcome in discovered DAG; SCM what-if skipped."}
+
+    subdag = scm_subgraph_for_driver(dag, x, y)
     if subdag is None:
-        return {"error": "No (directed or salvageable) causal path to outcome in discovered graph; SCM what-if skipped."}
+        return {"error": "Failed to construct SCM subgraph."}
 
     nodes = list(subdag.nodes)
     work = preprocess_for_estimation(df[nodes])
@@ -561,13 +457,12 @@ def build_and_sample_scm_driver_specific(
         "baseline_y_mean": base_mean,
         "delta_mean": float(cf_mean - base_mean),
         "delta_ci": [float(ci_low - base_mean), float(ci_high - base_mean)],
-        "scm_graph_mode": "directed" if nx.has_path(dag, x, y) else "salvaged_path",
     }
 
 
-# =========================
+# -------------------------
 # Narrative (minimal)
-# =========================
+# -------------------------
 
 def narrative_text(y: str, selected: List[Dict[str, Any]], eliminated: Dict[str, str], counterfactuals: Dict[str, Any], causal_chains: Dict[str, List[Dict[str, Any]]]) -> str:
     lines = [f"Kairos causal explanation for {y}.", "", "Key causal drivers (controllable only):"]
@@ -589,7 +484,7 @@ def narrative_text(y: str, selected: List[Dict[str, Any]], eliminated: Dict[str,
         elif isinstance(cf, dict) and "delta_mean" in cf:
             dm = float(cf["delta_mean"])
             lo, hi = cf.get("delta_ci", [None, None])
-            lines.append(f"- do({x}) => Δ{y} ≈ {dm:+.3f} (CI {lo:+.3f}..{hi:+.3f}) [{cf.get('scm_graph_mode','')}]")
+            lines.append(f"- do({x}) => Δ{y} ≈ {dm:+.3f} (CI {lo:+.3f}..{hi:+.3f})")
         else:
             lines.append(f"- do({x}) => {cf}")
 
@@ -610,9 +505,9 @@ def narrative_text(y: str, selected: List[Dict[str, Any]], eliminated: Dict[str,
     return "\n".join(lines)
 
 
-# =========================
+# -------------------------
 # Orchestrator
-# =========================
+# -------------------------
 
 def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: List[str], uncontrollable: List[str], cfg: KairosConfig) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
@@ -631,7 +526,7 @@ def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: Lis
         result["discovery_info"] = disc_info
 
     with stage("Build DAG from discovered edges"):
-        dag = build_dag(edges, cols, outcome=y)
+        dag = build_dag(edges, cols)
         result["dag"] = dag
 
     effects: List[Dict[str, Any]] = []
@@ -659,7 +554,7 @@ def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: Lis
         kprint(f"Selected drivers: {len(selected)} / {len(effects)}")
 
     with stage("Extract causal chains"):
-        causal_chains = extract_causal_chains(dag, selected, y=y, max_len=int(cfg.salvage_max_path_len))
+        causal_chains = extract_causal_chains(dag, selected, y=y, max_len=6)
         result["causal_chains"] = causal_chains
 
     counterfactuals: Dict[str, Any] = {}
@@ -685,7 +580,7 @@ def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: Lis
             if "error" in cf:
                 kprint(f"    → FAILED: {cf['error']} (in {time.time()-t0:.1f}s)")
             else:
-                kprint(f"    → Δ{y}={cf['delta_mean']:+.3f} CI={cf['delta_ci']} mode={cf.get('scm_graph_mode','')} (in {time.time()-t0:.1f}s)")
+                kprint(f"    → Δ{y}={cf['delta_mean']:+.3f} CI={cf['delta_ci']} (in {time.time()-t0:.1f}s)")
 
     result["counterfactuals"] = counterfactuals
 
@@ -695,9 +590,9 @@ def run_kairos(df: pd.DataFrame, y: str, explanans: List[str], controllable: Lis
     return result
 
 
-# =========================
+# -------------------------
 # YAML runner
-# =========================
+# -------------------------
 
 def build_kairos_config_from_yaml(cfgd: Dict[str, Any]) -> KairosConfig:
     cfgd = cfgd or {}
@@ -720,11 +615,11 @@ def build_kairos_config_from_yaml(cfgd: Dict[str, Any]) -> KairosConfig:
     for k in ("pc_alpha","fci_alpha","disc_min_std","disc_max_corr","min_abs_effect"):
         if k in filtered: filtered[k] = _as_float(filtered[k])
 
-    for k in ("min_rows_discovery","disc_min_unique","econml_cv","min_rows_estimation","max_drivers","scm_samples","min_rows_scm","salvage_max_path_len"):
+    for k in ("min_rows_discovery","disc_min_unique","econml_cv","min_rows_estimation","max_drivers","scm_samples","min_rows_scm"):
         if k in filtered: filtered[k] = _as_int(filtered[k])
 
-    for k in ("verbose","salvage_scm_path"):
-        if k in filtered: filtered[k] = _as_bool(filtered[k])
+    if "verbose" in filtered:
+        filtered["verbose"] = _as_bool(filtered["verbose"])
 
     return KairosConfig(**filtered)
 
@@ -772,55 +667,22 @@ def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
 
     result = run_kairos(df=df, y=y, explanans=explanans, controllable=controllable, uncontrollable=uncontrollable, cfg=cfg)
 
-    # -------------------------
-    # LLM executive narrative
-    # -------------------------
     llm_spec = spec.get("llm") or {}
     if bool(llm_spec.get("enabled", False)):
         with stage("LLM executive narrative"):
-            model = llm_spec.get("model") or "gemini-2.5-flash"
-            temperature = float(llm_spec.get("temperature", 0.2))
-            api_key_env = llm_spec.get("api_key_env") or "GEMINI_KEY"
-
-            kprint(f"[LLM] enabled=True model={model} temperature={temperature} api_key_env={api_key_env}")
-
-            # Fail loudly if key missing (prevents "LLM did nothing")
-            if not os.getenv(api_key_env):
-                msg = f"LLM enabled in YAML but env var '{api_key_env}' is not set."
-                kprint(f"[LLM] ERROR: {msg}")
-                result["exec_narrative_error"] = msg
-            else:
-                try:
-                    from kairos_narrative import generate_exec_narrative
-                except Exception as e:
-                    msg = f"Import failed for generate_exec_narrative: {e}"
-                    kprint(f"[LLM] ERROR: {msg}")
-                    result["exec_narrative_error"] = msg
-                else:
-                    try:
-                        # Call ONLY supported args (no provider)
-                        exec_text = generate_exec_narrative(
-                            result=result,
-                            y=y,
-                            max_drivers=int(getattr(cfg, "max_drivers", 5)),
-                            model=model,
-                            temperature=temperature,
-                            api_key_env=llm_spec.get("api_key_env", "GEMINI_KEY")
-                        )
-                        if not exec_text or not str(exec_text).strip():
-                            msg = "LLM call returned empty narrative."
-                            kprint(f"[LLM] ERROR: {msg}")
-                            result["exec_narrative_error"] = msg
-                        else:
-                            result["exec_narrative"] = exec_text
-                            kprint(f"[LLM] OK: exec_narrative_chars={len(exec_text)}")
-
-                    except Exception as e:
-                        msg = f"generate_exec_narrative failed: {repr(e)}"
-                        kprint(f"[LLM] ERROR: {msg}")
-                        result["exec_narrative_error"] = msg
-
-
+            try:
+                from kairos_narrative import generate_exec_narrative
+                exec_text = generate_exec_narrative(
+                    result=result,
+                    y=y,
+                    max_drivers=int(getattr(cfg, "max_drivers", 5)),
+                    model=llm_spec.get("model", "gemini-2.5-flash"),
+                    temperature=float(llm_spec.get("temperature", 0.2)),
+                )
+                result["exec_narrative"] = exec_text
+            except Exception as e:
+                result["exec_narrative_error"] = str(e)
+                kprint(f"LLM narrative failed: {e}")
 
     return result
 

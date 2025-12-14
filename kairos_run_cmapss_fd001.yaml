@@ -1,0 +1,109 @@
+version: 1
+
+# =========================
+# Dataset
+# =========================
+dataset:
+  path: "/workspaces/Kairos/cmapss_fd001_multisnapshot.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+# =========================
+# Target (explanandum)
+# =========================
+target:
+  outcome: "RUL"
+
+# =========================
+# Variable roles
+# =========================
+roles:
+  # If empty, Kairos will infer explanans as:
+  # all columns except outcome and uncontrollable
+  explanans: []
+
+  # Approximate operational levers (weak but real)
+  controllable:
+    - "op_setting_1"
+    - "op_setting_2"
+    - "op_setting_3"
+
+  # Context / identifiers (never optimize)
+  uncontrollable:
+    - "engine_id"
+    - "cycle"
+
+# =========================
+# Column types
+# =========================
+types:
+  numeric:
+    - "engine_id"
+    - "cycle"
+    - "RUL"
+    - "op_setting_1"
+    - "op_setting_2"
+    - "op_setting_3"
+    - "s1"
+    - "s2"
+    - "s3"
+    - "s4"
+    - "s5"
+    - "s6"
+    - "s7"
+    - "s8"
+    - "s9"
+    - "s10"
+    - "s11"
+    - "s12"
+    - "s13"
+    - "s14"
+    - "s15"
+    - "s16"
+    - "s17"
+    - "s18"
+    - "s19"
+    - "s20"
+    - "s21"
+
+  categorical: []
+
+# =========================
+# Preprocessing
+# =========================
+preprocess:
+  drop_rows_with_any_na: true
+  coerce_numeric_threshold: 0.95
+  trim_whitespace_in_strings: true
+
+# =========================
+# Kairos core configuration
+# =========================
+config:
+  pc_alpha: 0.05
+  fci_alpha: 0.05
+  econml_cv: 5
+  max_drivers: 6
+  scm_samples: 1000
+  verbose: true
+  min_rows_discovery: 200
+  disc_min_unique: 3
+  disc_min_std: 1e-8
+  disc_max_corr: 0.9995
+  
+
+# =========================
+# Outputs
+# =========================
+outputs:
+  dir: "/workspaces/Kairos/outputs"
+
+# =========================
+# Executive narrative (optional)
+# =========================
+llm:
+  enabled: true
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  temperature: 0.2
+  api_key_env: "GEMINI_KEY"
