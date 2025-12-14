@@ -728,6 +728,11 @@ def build_kairos_config_from_yaml(cfgd: Dict[str, Any]) -> KairosConfig:
 
     return KairosConfig(**filtered)
 
+def write_text_file(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text if text is not None else "")
+
 
 def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
     with open(yaml_path, "r", encoding="utf-8") as f:
@@ -777,48 +782,32 @@ def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
     # -------------------------
     llm_spec = spec.get("llm") or {}
     if bool(llm_spec.get("enabled", False)):
-        with stage("LLM executive narrative"):
-            model = llm_spec.get("model") or "gemini-2.5-flash"
-            temperature = float(llm_spec.get("temperature", 0.2))
-            api_key_env = llm_spec.get("api_key_env") or "GEMINI_KEY"
+        kprint(f"[LLM] enabled=True model={llm_spec.get('model')} temperature={llm_spec.get('temperature')} api_key_env={llm_spec.get('api_key_env')}")
+        try:
+            from kairos_narrative import generate_exec_narrative
 
-            kprint(f"[LLM] enabled=True model={model} temperature={temperature} api_key_env={api_key_env}")
+            exec_text = generate_exec_narrative(
+                result=result,
+                y=y,
+                max_drivers=int(getattr(cfg, "max_drivers", 5)),
+                model=str(llm_spec.get("model", "gemini-2.5-flash")),
+                temperature=float(llm_spec.get("temperature", 0.2)),
+                api_key_env=str(llm_spec.get("api_key_env", "GEMINI_KEY")),
+            )
 
-            # Fail loudly if key missing (prevents "LLM did nothing")
-            if not os.getenv(api_key_env):
-                msg = f"LLM enabled in YAML but env var '{api_key_env}' is not set."
-                kprint(f"[LLM] ERROR: {msg}")
-                result["exec_narrative_error"] = msg
-            else:
-                try:
-                    from kairos_narrative import generate_exec_narrative
-                except Exception as e:
-                    msg = f"Import failed for generate_exec_narrative: {e}"
-                    kprint(f"[LLM] ERROR: {msg}")
-                    result["exec_narrative_error"] = msg
-                else:
-                    try:
-                        # Call ONLY supported args (no provider)
-                        exec_text = generate_exec_narrative(
-                            result=result,
-                            y=y,
-                            max_drivers=int(getattr(cfg, "max_drivers", 5)),
-                            model=model,
-                            temperature=temperature,
-                            api_key_env=llm_spec.get("api_key_env", "GEMINI_KEY")
-                        )
-                        if not exec_text or not str(exec_text).strip():
-                            msg = "LLM call returned empty narrative."
-                            kprint(f"[LLM] ERROR: {msg}")
-                            result["exec_narrative_error"] = msg
-                        else:
-                            result["exec_narrative"] = exec_text
-                            kprint(f"[LLM] OK: exec_narrative_chars={len(exec_text)}")
+            result["exec_narrative"] = exec_text
 
-                    except Exception as e:
-                        msg = f"generate_exec_narrative failed: {repr(e)}"
-                        kprint(f"[LLM] ERROR: {msg}")
-                        result["exec_narrative_error"] = msg
+            # ---- PRINT IT (this is what you're missing)
+            print("\n" + "=" * 80 + "\n")
+            print(exec_text.strip() if exec_text else "[LLM] exec narrative returned empty text")
+            print("\n" + "=" * 80 + "\n")
+
+            # ---- SAVE IT
+            out_dir = str(spec.get("outputs_dir", "/workspaces/Kairos/outputs"))
+            write_text_file(os.path.join(out_dir, "exec_narrative.md"), exec_text)
+
+        except Exception as e:
+            kprint(f"[LLM] ERROR: generate_exec_narrative failed: {repr(e)}")
 
 
 
