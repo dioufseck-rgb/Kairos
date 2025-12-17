@@ -1,34 +1,39 @@
-## Key Drivers of Unplanned Downtime Hours (Next 30d)
+## Causal Analysis of Final Arrival Delay
 
-This report identifies the primary causal drivers influencing Unplanned Downtime Hours (Next 30d). We found that Spare Parts Availability Index and Maintenance Quality Index are key factors that, if improved, could reduce downtime. Conversely, Production Target Pressure Index and Lubrication Interval (Days) are associated with increased downtime. Operator Training Hours (Monthly) shows a minor negative association with downtime. Understanding these causal pathways is crucial for effective intervention strategies.
+This report identifies key drivers influencing 'final_arrival_delay_min'. Our analysis, based on 5000 rows of data, reveals that 'dwell_passenger_delay_s2' and 'dwell_passenger_delay_s5' are the most significant causal factors, with 'connection_hold_delay_s2', 'track_delay_g5', and 'track_delay_g2' also contributing to delays. Interventions targeting passenger dwell delays show potential for impact, though with considerable uncertainty in the estimated effect range. The causal pathways identified are based on undirected shortest paths, indicating that while a relationship exists, the precise directionality of all links within the chain was not uniquely identified.
 
 ### Key causal drivers
-- **Maintenance Quality Index** — A one standard deviation increase in Maintenance Quality Index is causally associated with a decrease of -2.0048112824315227 Unplanned Downtime Hours (Next 30d) per +1σ.
-  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected Unplanned Downtime Hours (Next 30d) change, given the discovered causal structure?
-  - What-if: Δ ≈ -1.588 (CI -13.305..+10.567)
-  - Chain: Maintenance Quality Index → Vibration RMS → Failure Risk (0-1) → Unplanned Downtime Hours (Next 30d)
-  - Notes: There is uncertainty in the counterfactual estimate, as indicated by the wide confidence interval. The causal direction within the chain was not uniquely identified by the discovery algorithm.
-- **Production Target Pressure Index** — A one standard deviation increase in Production Target Pressure Index is causally associated with an increase of 1.6487443865426834 Unplanned Downtime Hours (Next 30d) per +1σ.
-  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected Unplanned Downtime Hours (Next 30d) change, given the discovered causal structure?
-  - What-if: Δ ≈ +1.226 (CI -12.359..+12.388)
-  - Chain: Production Target Pressure Index → Defect Rate Index → Unplanned Downtime Hours (Next 30d)
-  - Notes: There is uncertainty in the counterfactual estimate, as indicated by the wide confidence interval. The causal direction within the chain was not uniquely identified by the discovery algorithm.
-- **Lubrication Interval (Days)** — A one standard deviation increase in Lubrication Interval (Days) is causally associated with an increase of 0.4083902250330512 Unplanned Downtime Hours (Next 30d) per +1σ.
-  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected Unplanned Downtime Hours (Next 30d) change, given the discovered causal structure?
-  - What-if: Δ ≈ +0.933 (CI -11.515..+12.752)
-  - Chain: Lubrication Interval (Days) → Vibration RMS → Failure Risk (0-1) → Unplanned Downtime Hours (Next 30d)
-  - Notes: There is uncertainty in the counterfactual estimate, as indicated by the wide confidence interval. The causal direction within the chain was not uniquely identified by the discovery algorithm.
-- **Operator Training Hours (Monthly)** — A one standard deviation increase in Operator Training Hours (Monthly) is causally associated with a decrease of -0.1519912030399265 Unplanned Downtime Hours (Next 30d) per +1σ.
-  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected Unplanned Downtime Hours (Next 30d) change, given the discovered causal structure?
-  - What-if: Δ ≈ -0.181 (CI -12.890..+10.990)
-  - Chain: Operator Training Hours (Monthly) → Procedure Compliance Index → Defect Rate Index → Unplanned Downtime Hours (Next 30d)
-  - Notes: There is uncertainty in the counterfactual estimate, as indicated by the wide confidence interval. The causal direction within the chain was not uniquely identified by the discovery algorithm.
+- **connection_hold_delay_s2** — For every +1 standard deviation increase in connection_hold_delay_s2, final_arrival_delay_min is expected to increase by 1.316 minutes, holding all other factors constant.
+  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected final_arrival_delay_min change, given the discovered causal structure?
+  - What-if: counterfactual not available (SCM skipped: non-numeric / low-variance / discrete intervention variable.)
+  - Chain: connection_hold_delay_s2 → arrival_delay_s2 → arrival_delay_s3 → arrival_delay_s4 → arrival_delay_s5 → final_arrival_delay_min
+  - Notes: The causal chain was identified as an undirected shortest path, meaning the direction of causality for all links within the chain was not uniquely identified. Counterfactual analysis was skipped due to the intervention variable's characteristics.
+- **track_delay_g5** — For every +1 standard deviation increase in track_delay_g5, final_arrival_delay_min is expected to increase by 1.057 minutes, holding all other factors constant.
+  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected final_arrival_delay_min change, given the discovered causal structure?
+  - What-if: counterfactual not available (No (directed or salvageable) causal path to outcome in discovered graph; SCM what-if skipped.)
+  - Chain: track_delay_g5 → segment_total_delay_g5 → arrival_delay_s1 → arrival_delay_s2 → arrival_delay_s3 → final_arrival_delay_min
+  - Notes: The causal chain was identified as an undirected shortest path, meaning the direction of causality for all links within the chain was not uniquely identified. Counterfactual analysis was skipped because no directed or salvageable causal path to the outcome was found in the discovered graph.
+- **track_delay_g2** — For every +1 standard deviation increase in track_delay_g2, final_arrival_delay_min is expected to increase by 1.054 minutes, holding all other factors constant.
+  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected final_arrival_delay_min change, given the discovered causal structure?
+  - What-if: counterfactual not available (No (directed or salvageable) causal path to outcome in discovered graph; SCM what-if skipped.)
+  - Chain: track_delay_g2 → segment_total_delay_g2 → arrival_delay_s1 → arrival_delay_s2 → arrival_delay_s3 → final_arrival_delay_min
+  - Notes: The causal chain was identified as an undirected shortest path, meaning the direction of causality for all links within the chain was not uniquely identified. Counterfactual analysis was skipped because no directed or salvageable causal path to the outcome was found in the discovered graph.
+- **dwell_passenger_delay_s2** — For every +1 standard deviation increase in dwell_passenger_delay_s2, final_arrival_delay_min is expected to increase by 2.250 minutes, holding all other factors constant.
+  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected final_arrival_delay_min change, given the discovered causal structure?
+  - What-if: Δ ≈ +0.918 (CI -18.465..+24.116)
+  - Chain: dwell_passenger_delay_s2 → passengers → dwell_passenger_delay_s6 → final_arrival_delay_min
+  - Notes: The causal chain was identified as an undirected shortest path, meaning the direction of causality for all links within the chain was not uniquely identified. The counterfactual estimate shows a wide confidence interval, indicating significant uncertainty in the precise impact of this intervention.
+- **dwell_passenger_delay_s5** — For every +1 standard deviation increase in dwell_passenger_delay_s5, final_arrival_delay_min is expected to increase by 2.197 minutes, holding all other factors constant.
+  - If we intervene on this driver in a realistic way (p50 → p75 (median to 75th percentile)), how would expected final_arrival_delay_min change, given the discovered causal structure?
+  - What-if: Δ ≈ +1.155 (CI -18.425..+26.900)
+  - Chain: dwell_passenger_delay_s5 → passengers → dwell_passenger_delay_s6 → final_arrival_delay_min
+  - Notes: The causal chain was identified as an undirected shortest path, meaning the direction of causality for all links within the chain was not uniquely identified. The counterfactual estimate shows a wide confidence interval, indicating significant uncertainty in the precise impact of this intervention.
 
 ### What not to optimize (and why)
 - None.
 
 ### Next steps
-- Prioritize interventions on 'Spare Parts Availability Index' and 'Maintenance Quality Index' to potentially reduce Unplanned Downtime Hours (Next 30d).
-- Investigate the pathways identified for 'Production Target Pressure Index' and 'Lubrication Interval (Days)' to understand how they contribute to increased downtime and identify mitigation strategies.
-- Further analyze the identified causal chains to refine understanding of the mechanisms and potential interaction effects between drivers.
-- Monitor the impact of any implemented interventions on Unplanned Downtime Hours (Next 30d) and related metrics to validate causal findings.
+- Validate the identified causal pathways and their directionality with domain experts to refine the understanding of these complex systems.
+- Investigate the specific mechanisms through which 'dwell_passenger_delay_s2' and 'dwell_passenger_delay_s5' influence 'passengers' and subsequently 'dwell_passenger_delay_s6' to better target interventions.
+- Prioritize interventions on drivers with available counterfactual estimates, while acknowledging the wide confidence intervals and inherent uncertainty.
+- Collect additional data or conduct targeted experiments to reduce uncertainty in counterfactual estimates and confirm the causal directions for 'undirected_shortest' paths.

@@ -1,0 +1,76 @@
+version: 1
+
+dataset:
+  path: "/workspaces/Kairos/synth_kairos.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+target:
+  outcome: "Overall Satisfaction"
+
+columns:
+  include: []
+  exclude: []
+
+roles:
+  explanans: []   # leave empty: will infer all columns except outcome
+
+  controllable:
+    - "Staffing Level (Proxy)"
+    - "Total Fare Amount"
+    - "Communication About Status"
+    - "Cleanliness"
+    - "Comfort"
+    - "Wi-Fi"
+    - "Food & Beverage"
+    - "Departure Delay (Minutes)"
+    - "Arrival Delay (Minutes)"
+
+  uncontrollable:
+    - "Region"
+    - "Customer Segment"
+    - "Age Range"
+    - "Season"
+    - "Distance (Miles)"
+    - "Track Congestion (Proxy)"
+
+types:
+  numeric:
+    - "Distance (Miles)"
+    - "Staffing Level (Proxy)"
+    - "Track Congestion (Proxy)"
+    - "Total Fare Amount"
+    - "Communication About Status"
+    - "Cleanliness"
+    - "Comfort"
+    - "Wi-Fi"
+    - "Food & Beverage"
+    - "Departure Delay (Minutes)"
+    - "Arrival Delay (Minutes)"
+    - "On-time Performance"
+    - "Overall Satisfaction"
+  categorical:
+    - "Region"
+    - "Customer Segment"
+    - "Age Range"
+    - "Season"
+
+config:
+  pc_alpha: 0.05
+  fci_alpha: 0.05
+  econml_cv: 5
+  max_drivers: 6
+  scm_samples: 1000
+  verbose: true
+  min_rows_discovery: 200
+  disc_min_unique: 3
+  disc_min_std: 1e-8
+  disc_max_corr: 0.9995
+  verbose: true
+
+llm:
+  enabled: true
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  temperature: 0.0
+  api_key_env: "GEMINI_KEY"

@@ -79,3 +79,7 @@ llm:
   model: "gemini-2.5-flash"
   temperature: 0.0
   api_key_env: "GEMINI_KEY"
+
+viz:
+  enabled: true
+  prefix: "corridor"

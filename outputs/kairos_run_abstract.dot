@@ -1,0 +1,18 @@
+digraph Kairos {
+  rankdir="LR";
+  graph [fontname="Helvetica", fontsize=18, labelloc="t"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled"];
+  edge  [fontname="Helvetica", fontsize=10, arrowsize=0.8];
+  label="Kairos — Abstract Causal Graph (Explanatory Projection)";
+  "final_arrival_delay_min" [label="final_arrival_delay_min", fillcolor="#FDE68A", penwidth=3.00, width=1.20];
+  "connection_hold_delay_s2" [label="connection_hold_delay_s2\nATE=1.316", fillcolor="#DBEAFE", penwidth=2.20, width=2.84];
+  "track_delay_g5" [label="track_delay_g5\nATE=1.057", fillcolor="#DBEAFE", penwidth=2.20, width=2.52];
+  "track_delay_g2" [label="track_delay_g2\nATE=1.054", fillcolor="#DBEAFE", penwidth=2.20, width=2.51];
+  "dwell_passenger_delay_s2" [label="dwell_passenger_delay_s2\nATE=2.250", fillcolor="#DBEAFE", penwidth=2.20, width=4.00];
+  "dwell_passenger_delay_s5" [label="dwell_passenger_delay_s5\nATE=2.197", fillcolor="#DBEAFE", penwidth=2.20, width=3.93];
+  "connection_hold_delay_s2" -> "final_arrival_delay_min" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "track_delay_g5" -> "final_arrival_delay_min" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "track_delay_g2" -> "final_arrival_delay_min" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "dwell_passenger_delay_s2" -> "final_arrival_delay_min" [label="inferred causal path", color="#111827", penwidth=2.20];
+  "dwell_passenger_delay_s5" -> "final_arrival_delay_min" [label="inferred causal path", color="#111827", penwidth=2.20];
+}

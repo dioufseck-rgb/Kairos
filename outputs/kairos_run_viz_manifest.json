@@ -1,0 +1,10 @@
+{
+  "paths": {
+    "full_dot": "/workspaces/Kairos/outputs/kairos_run_full.dot",
+    "abstract_dot": "/workspaces/Kairos/outputs/kairos_run_abstract.dot",
+    "chain_cards_png": "/workspaces/Kairos/outputs/kairos_run_chain_cards.png",
+    "full_png": "/workspaces/Kairos/outputs/kairos_run_full.png",
+    "abstract_png": "/workspaces/Kairos/outputs/kairos_run_abstract.png"
+  },
+  "render_errors": null
+}

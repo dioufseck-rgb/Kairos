@@ -440,6 +440,7 @@ HARD RULES (NON-NEGOTIABLE)
    Do NOT output a text delta summary.
 7) Include "What not to optimize (and why)" grounded ONLY in eliminated variables using DO_NOT_OPTIMIZE_SEED.
    Do NOT introduce new eliminated variables.
+8) Round any numbers in the text summary to 3 decimal places.
 
 OUTPUT FORMAT
 Return VALID JSON ONLY (no markdown, no commentary) with this structure:

@@ -274,6 +274,45 @@ def render_dot_to_file(dot: str, out_path: str, fmt: str = "png") -> str:
 
 
 # -------------------------
+# Pure-Python PNG fallback (NO graphviz needed)
+# -------------------------
+
+def render_nx_fallback_png(
+    G: nx.DiGraph,
+    out_path: str,
+    *,
+    title: Optional[str] = None,
+    figsize=(18, 7),
+) -> str:
+    """
+    Pure-Python fallback PNG renderer using networkx + matplotlib.
+    Works even when Graphviz 'dot' executable is not installed.
+    """
+    import matplotlib.pyplot as plt
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    plt.figure(figsize=figsize)
+    try:
+        pos = nx.spring_layout(G, seed=42, k=0.85)
+    except Exception:
+        pos = nx.random_layout(G, seed=42)
+
+    nx.draw_networkx_nodes(G, pos, node_size=1100)
+    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", width=1.2)
+    nx.draw_networkx_labels(G, pos, font_size=9)
+
+    if title:
+        plt.title(title)
+
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    return out_path
+
+
+# -------------------------
 # Result tables
 # -------------------------
 
@@ -316,7 +355,6 @@ def counterfactuals_table(result: Dict[str, Any]) -> pd.DataFrame:
         if isinstance(v, dict) and "error" in v:
             rows.append({"driver": k, "delta_mean": None, "ci_low": None, "ci_high": None, "error": v["error"]})
         elif isinstance(v, dict):
-            # prefer deltas if available, else show absolute
             if "delta_mean" in v and "delta_ci" in v:
                 ci = v.get("delta_ci", [None, None])
                 rows.append({
@@ -327,7 +365,6 @@ def counterfactuals_table(result: Dict[str, Any]) -> pd.DataFrame:
                     "error": None
                 })
             else:
-                ci = v.get("counterfactual_ci", [None, None])
                 rows.append({
                     "driver": k,
                     "delta_mean": None,
@@ -400,7 +437,6 @@ def render_chain_cards_png(
     body_font = _default_font(16)
     small_font = _default_font(14)
 
-    # Prepare card texts
     card_texts: List[str] = []
     for d in selected_drivers:
         x = d.get("x", "")
@@ -409,7 +445,7 @@ def render_chain_cards_png(
 
         chains = causal_chains.get(x, [])
         if chains:
-            top_chain = chains[0]  # longest available due to sorting in extract_causal_chains
+            top_chain = chains[0]
             chain_path = " → ".join([str(z) for z in top_chain.get("chain", [x, y])])
             chain_type = str(top_chain.get("type", "unknown"))
         else:
@@ -417,31 +453,25 @@ def render_chain_cards_png(
             chain_type = "abstracted (difference-making)"
 
         cf = counterfactuals.get(x)
-
-        # Build What-if text (prefer delta; compute delta if possible)
         cf_text = "What-if: (not available)"
         if isinstance(cf, dict) and cf:
             if "error" in cf:
                 cf_text = f"What-if: (not available) {cf['error']}"
             else:
-                # Try to source a baseline either from bundle baseline or per-cf baseline
                 _baseline = baseline_y_mean
                 if _baseline is None:
                     _baseline = cf.get("baseline_y_mean", None)
 
-                # Prefer delta if present
                 if "delta_mean" in cf and "delta_ci" in cf:
                     dmean = float(cf["delta_mean"])
                     dci = cf.get("delta_ci", [None, None])
                     cf_text = f"What-if: Δ{y} ≈ {dmean:+.3f} (CI {dci[0]:+.3f}..{dci[1]:+.3f})"
-                # Compute delta if only absolute is present and baseline is available
                 elif ("counterfactual_mean" in cf and "counterfactual_ci" in cf and _baseline is not None):
                     cf_mean = float(cf["counterfactual_mean"])
                     ci_low, ci_high = cf["counterfactual_ci"]
                     dmean = cf_mean - float(_baseline)
                     dci = [ci_low - float(_baseline), ci_high - float(_baseline)]
                     cf_text = f"What-if: Δ{y} ≈ {dmean:+.3f} (CI {dci[0]:+.3f}..{dci[1]:+.3f})"
-                # Fallback to absolute if that’s all we have
                 elif ("counterfactual_mean" in cf and "counterfactual_ci" in cf):
                     cf_mean = float(cf["counterfactual_mean"])
                     ci = cf.get("counterfactual_ci", [None, None])
@@ -464,7 +494,6 @@ def render_chain_cards_png(
         img.save(out_path)
         return out_path
 
-    # Measure card heights based on wrapped lines
     def measure_card_height(text: str) -> int:
         lines = _wrap_lines(text, wrap_chars)
         h_title = 28
@@ -478,7 +507,6 @@ def render_chain_cards_png(
     n_cards = len(card_texts)
     rows = (n_cards + cards_per_row - 1) // cards_per_row
 
-    # Row heights
     row_heights: List[int] = []
     for r in range(rows):
         start = r * cards_per_row
@@ -486,7 +514,7 @@ def render_chain_cards_png(
         row_heights.append(max(card_heights[start:end]))
 
     img_width = cards_per_row * card_width + (cards_per_row - 1) * gap + 2 * padding
-    img_height = sum(row_heights) + (rows - 1) * gap + 2 * padding + 54  # header band
+    img_height = sum(row_heights) + (rows - 1) * gap + 2 * padding + 54
 
     img = Image.new("RGB", (img_width, img_height), "white")
     draw = ImageDraw.Draw(img)
@@ -552,20 +580,18 @@ def make_visual_bundle(
     render_formats: Optional[List[str]] = None,  # e.g. ["svg", "png", "pdf"]
 ) -> Dict[str, Any]:
     """
-    Produces DOT and optionally rendered files for:
+    Produces DOT and rendered files for:
       - full dag
       - abstract dag (explanatory projection)
       - chain cards PNG (no Graphviz)
 
-    Saves:
-      - <run_name>_full.dot
-      - <run_name>_abstract.dot
-      - <run_name>_full.{svg/png/pdf}  (if Graphviz available)
-      - <run_name>_abstract.{svg/png/pdf} (if Graphviz available)
-      - <run_name>_chain_cards.png
+    Always saves DOT.
+    For PNG:
+      - first tries Graphviz (dot)
+      - if Graphviz fails/missing, falls back to networkx+matplotlib PNG
     """
     if render_formats is None:
-        render_formats = ["png"]  # keep default simple
+        render_formats = ["png"]
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -577,7 +603,6 @@ def make_visual_bundle(
     effects = result.get("effects", []) or []
     selected = result.get("selected_drivers", []) or []
 
-    # DOT strings
     full_dot = dag_to_dot_styled(
         dag=dag,
         y=y,
@@ -602,7 +627,6 @@ def make_visual_bundle(
         show_edge_sources=True,
     )
 
-    # Save DOT files
     full_dot_path = os.path.join(output_dir, f"{run_name}_full.dot")
     abstract_dot_path = os.path.join(output_dir, f"{run_name}_abstract.dot")
     with open(full_dot_path, "w", encoding="utf-8") as f:
@@ -627,7 +651,6 @@ def make_visual_bundle(
         },
     }
 
-    # Causal chains (prefer longer when available)
     bundle["causal_chains"] = extract_causal_chains(
         dag=dag,
         y=y,
@@ -651,8 +674,10 @@ def make_visual_bundle(
         bundle.setdefault("render_errors", {})
         bundle["render_errors"]["chain_cards_png"] = str(e)
 
-    # Optional Graphviz rendering (may fail if dot is not installed)
+    # Optional Graphviz rendering
     render_errors: Dict[str, str] = {}
+    graphviz_failed_for_png = False
+
     for fmt in render_formats:
         try:
             full_base = os.path.join(output_dir, f"{run_name}_full")
@@ -675,35 +700,26 @@ def make_visual_bundle(
 
         except Exception as e:
             render_errors[str(fmt)] = str(e)
+            if str(fmt).lower() == "png":
+                graphviz_failed_for_png = True
+
+    # Fallback PNGs if Graphviz PNG failed or wasn't produced
+    if ("png" in [str(x).lower() for x in render_formats]) and (graphviz_failed_for_png or ("full_png" not in bundle["paths"])):
+        try:
+            full_png = os.path.join(output_dir, f"{run_name}_full_fallback.png")
+            abs_png = os.path.join(output_dir, f"{run_name}_abstract_fallback.png")
+
+            bundle["paths"]["full_png"] = render_nx_fallback_png(
+                dag, full_png, title="Kairos — Full Causal Graph (fallback)"
+            )
+            bundle["paths"]["abstract_png"] = render_nx_fallback_png(
+                abstract_dag, abs_png, title="Kairos — Abstract Causal Graph (fallback)"
+            )
+        except Exception as e:
+            render_errors["png_fallback"] = str(e)
 
     if render_errors:
         bundle.setdefault("render_errors", {})
         bundle["render_errors"].update(render_errors)
 
     return bundle
-def render_nx_fallback_png(G, out_path: str, *, figsize=(14, 10)) -> str:
-    """
-    Pure-Python fallback PNG renderer using networkx + matplotlib.
-    Works even when Graphviz 'dot' executable is not installed.
-    """
-    import matplotlib.pyplot as plt
-    import networkx as nx
-    import os
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
-    plt.figure(figsize=figsize)
-    try:
-        pos = nx.spring_layout(G, seed=42, k=0.8)
-    except Exception:
-        pos = nx.random_layout(G, seed=42)
-
-    nx.draw_networkx_nodes(G, pos, node_size=900)
-    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", width=1.2)
-    nx.draw_networkx_labels(G, pos, font_size=9)
-
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=180)
-    plt.close()
-    return out_path

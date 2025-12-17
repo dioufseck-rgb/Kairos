@@ -1,0 +1,128 @@
+version: 1
+
+dataset:
+  path: "/workspaces/Kairos/synthetic_corridor_trips.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+target:
+  outcome: "final_arrival_delay_min"
+
+columns:
+  include: []
+  exclude:
+    # keep the target as outcome; exclude derived duplicates if you want
+    - "passenger_weighted_OTP_15"
+
+roles:
+  explanans: []
+
+  controllable:
+    # --- Station delays (controllable)
+    - "dwell_passenger_delay_s1"
+    - "dwell_passenger_delay_s2"
+    - "dwell_passenger_delay_s3"
+    - "dwell_passenger_delay_s4"
+    - "dwell_passenger_delay_s5"
+    - "dwell_passenger_delay_s6"
+
+    - "dwell_crew_delay_s1"
+    - "dwell_crew_delay_s2"
+    - "dwell_crew_delay_s3"
+    - "dwell_crew_delay_s4"
+    - "dwell_crew_delay_s5"
+    - "dwell_crew_delay_s6"
+
+    - "dispatch_delay_s1"
+    - "dispatch_delay_s2"
+    - "dispatch_delay_s3"
+    - "dispatch_delay_s4"
+    - "dispatch_delay_s5"
+    - "dispatch_delay_s6"
+
+    - "servicing_delay_s1"
+    - "servicing_delay_s2"
+    - "servicing_delay_s3"
+    - "servicing_delay_s4"
+    - "servicing_delay_s5"
+    - "servicing_delay_s6"
+
+    - "connection_hold_delay_s1"
+    - "connection_hold_delay_s2"
+    - "connection_hold_delay_s3"
+    - "connection_hold_delay_s4"
+    - "connection_hold_delay_s5"
+    - "connection_hold_delay_s6"
+
+    - "scheduled_buffer_s1"
+    - "scheduled_buffer_s2"
+    - "scheduled_buffer_s3"
+    - "scheduled_buffer_s4"
+    - "scheduled_buffer_s5"
+    - "scheduled_buffer_s6"
+
+    # --- Segment delays (partially controllable)
+    - "track_delay_g1"
+    - "track_delay_g2"
+    - "track_delay_g3"
+    - "track_delay_g4"
+    - "track_delay_g5"
+
+    - "signal_delay_g1"
+    - "signal_delay_g2"
+    - "signal_delay_g3"
+    - "signal_delay_g4"
+    - "signal_delay_g5"
+
+    # Optional: mechanical can be "somewhat controllable" via maintenance
+    - "mechanical_delay_g1"
+    - "mechanical_delay_g2"
+    - "mechanical_delay_g3"
+    - "mechanical_delay_g4"
+    - "mechanical_delay_g5"
+
+  uncontrollable:
+    - "weather_delay_g1"
+    - "weather_delay_g2"
+    - "weather_delay_g3"
+    - "weather_delay_g4"
+    - "weather_delay_g5"
+
+    - "incident_delay_g1"
+    - "incident_delay_g2"
+    - "incident_delay_g3"
+    - "incident_delay_g4"
+    - "incident_delay_g5"
+
+    - "host_rr_delay_g1"
+    - "host_rr_delay_g2"
+    - "host_rr_delay_g3"
+    - "host_rr_delay_g4"
+    - "host_rr_delay_g5"
+
+  context:
+    - "passengers"
+    - "equipment_type"
+    - "dep_hour"
+
+kairos_config:
+  pc_alpha: 0.05
+  fci_alpha: 0.05
+  min_rows_discovery: 200
+
+  econml_cv: 3
+  max_drivers: 5
+  scm_samples: 1000
+
+  verbose: true
+
+llm:
+  enabled: true
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  temperature: 0.0
+  api_key_env: "GEMINI_KEY"
+
+viz:
+  enabled: true
+  prefix: "corridor"

@@ -2,6 +2,7 @@
 # Kairos Core (PC+FCI + DoWhy + EconML + SCM + YAML runner)
 #   - Adds "causal-path salvage" for SCM when discovery doesn't orient a directed path to Y
 #   - Adds cycle-breaking that protects edges into the outcome (and along X→Y paths)
+#   - Adds visualization bundle output (full + abstract PNG saved even without Graphviz)
 # =========================
 
 from __future__ import annotations
@@ -87,7 +88,6 @@ class KairosConfig:
     min_rows_scm: int = 80
 
     # if discovery doesn't give a directed X→Y path, try to salvage a plausible local
-    # direction by orienting an undirected shortest path toward Y.
     salvage_scm_path: bool = True
     salvage_max_path_len: int = 6
 
@@ -269,7 +269,6 @@ def discover_pc_fci(df: pd.DataFrame, cols: List[str], cfg: KairosConfig) -> Tup
 
 # =========================
 # DAG building with safer cycle breaking
-#   We try to preserve edges into y and edges on any (undirected) x~y corridor.
 # =========================
 
 def _corridor_edges_to_outcome(G: nx.DiGraph, outcome: str) -> Set[Tuple[str, str]]:
@@ -277,7 +276,6 @@ def _corridor_edges_to_outcome(G: nx.DiGraph, outcome: str) -> Set[Tuple[str, st
         return set()
     U = G.to_undirected()
     corridor: Set[Tuple[str, str]] = set()
-    # mark all edges incident to outcome (both directions) + edges on shortest paths to outcome
     for n in G.nodes:
         if n == outcome:
             continue
@@ -289,7 +287,6 @@ def _corridor_edges_to_outcome(G: nx.DiGraph, outcome: str) -> Set[Tuple[str, st
                     corridor.add((b, a))
             except Exception:
                 pass
-    # also preserve direct incident edges
     for u in list(G.predecessors(outcome)):
         corridor.add((u, outcome))
     for v in list(G.successors(outcome)):
@@ -312,8 +309,6 @@ def build_dag(edges: List[Tuple[str, str, str]], cols: List[str], *, outcome: st
 
     corridor = _corridor_edges_to_outcome(G, outcome)
 
-    # break cycles conservatively, trying NOT to remove corridor edges
-    # if forced, remove the first non-corridor edge in the cycle, else remove an edge not incident to outcome.
     while True:
         try:
             cyc = nx.find_cycle(G)
@@ -336,7 +331,6 @@ def build_dag(edges: List[Tuple[str, str, str]], cols: List[str], *, outcome: st
                 break
 
         if not removed:
-            # last resort
             G.remove_edge(*cyc[0])
 
     return G
@@ -380,8 +374,8 @@ def estimate_effect(df: pd.DataFrame, dag: nx.DiGraph, x: str, y: str, confounde
 
     return {
         "x": x,
-        "effect": ate_per_unit,        # per +1 unit (debug)
-        "effect_per_1sd": ate_per_1sd, # per +1σ (exec-facing)
+        "effect": ate_per_unit,
+        "effect_per_1sd": ate_per_1sd,
         "treatment_std": t_std,
         "estimand": str(estimand),
         "method": "DoWhy identify + EconML LinearDML",
@@ -438,7 +432,6 @@ def extract_causal_chains(dag: nx.DiGraph, drivers: List[Dict[str, Any]], y: str
                 path = path[:max_len-1] + [y]
             chains[x] = [{"chain": path, "type": "directed_shortest"}]
         except Exception:
-            # fallback to undirected shortest path
             try:
                 U = dag.to_undirected()
                 p = nx.shortest_path(U, source=x, target=y)
@@ -452,7 +445,6 @@ def extract_causal_chains(dag: nx.DiGraph, drivers: List[Dict[str, Any]], y: str
 
 # =========================
 # SCM counterfactuals
-#   If no directed path exists, optionally salvage by orienting an undirected shortest path toward Y.
 # =========================
 
 def propose_intervention_value(df: pd.DataFrame, x: str) -> Optional[float]:
@@ -480,7 +472,6 @@ def gcm_interventional_samples_compat(scm: StructuralCausalModel, interventions:
 
 
 def _salvage_local_path_dag(dag: nx.DiGraph, x: str, y: str, max_len: int) -> Optional[nx.DiGraph]:
-    # Build a tiny DAG by orienting an undirected shortest path x~...~y toward y.
     if x not in dag or y not in dag:
         return None
     U = dag.to_undirected()
@@ -494,7 +485,6 @@ def _salvage_local_path_dag(dag: nx.DiGraph, x: str, y: str, max_len: int) -> Op
     H.add_nodes_from(p)
     for a, b in zip(p[:-1], p[1:]):
         H.add_edge(a, b, source="salvaged_path")
-    # Add direct parents of y from original dag if present on path nodes (helps model y)
     for u in dag.predecessors(y):
         if u in H and u != y:
             H.add_edge(u, y, source="salvaged_parent")
@@ -728,6 +718,7 @@ def build_kairos_config_from_yaml(cfgd: Dict[str, Any]) -> KairosConfig:
 
     return KairosConfig(**filtered)
 
+
 def write_text_file(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -778,6 +769,42 @@ def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
     result = run_kairos(df=df, y=y, explanans=explanans, controllable=controllable, uncontrollable=uncontrollable, cfg=cfg)
 
     # -------------------------
+    # Visualizations
+    # -------------------------
+    viz_spec = spec.get("viz") or {}
+    if bool(viz_spec.get("enabled", True)):
+        with stage("Visualizations (PNG/DOT bundle)"):
+            try:
+                from kairos_viz import make_visual_bundle
+                out_dir = str(spec.get("outputs_dir", "/workspaces/Kairos/outputs"))
+                run_name = str(viz_spec.get("run_name") or spec.get("run_name") or "kairos_run")
+                render_formats = viz_spec.get("render_formats") or ["png"]
+
+                bundle = make_visual_bundle(
+                    result=result,
+                    y=y,
+                    output_dir=out_dir,
+                    run_name=run_name,
+                    render_formats=render_formats,
+                )
+                result["viz"] = bundle
+
+                paths = bundle.get("paths", {})
+                kprint(f"[Viz] Saved DOT: {paths.get('full_dot')}")
+                kprint(f"[Viz] Saved DOT: {paths.get('abstract_dot')}")
+                kprint(f"[Viz] Saved PNG: {paths.get('full_png')}")
+                kprint(f"[Viz] Saved PNG: {paths.get('abstract_png')}")
+                kprint(f"[Viz] Saved cards: {paths.get('chain_cards_png')}")
+
+                # Persist a manifest for debugging
+                manifest_path = os.path.join(out_dir, f"{run_name}_viz_manifest.json")
+                write_text_file(manifest_path, json.dumps({"paths": paths, "render_errors": bundle.get("render_errors")}, indent=2))
+                kprint(f"[Viz] Manifest: {manifest_path}")
+
+            except Exception as e:
+                kprint(f"[Viz] ERROR: visualization bundle failed: {repr(e)}")
+
+    # -------------------------
     # LLM executive narrative
     # -------------------------
     llm_spec = spec.get("llm") or {}
@@ -797,19 +824,15 @@ def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
 
             result["exec_narrative"] = exec_text
 
-            # ---- PRINT IT (this is what you're missing)
             print("\n" + "=" * 80 + "\n")
             print(exec_text.strip() if exec_text else "[LLM] exec narrative returned empty text")
             print("\n" + "=" * 80 + "\n")
 
-            # ---- SAVE IT
             out_dir = str(spec.get("outputs_dir", "/workspaces/Kairos/outputs"))
             write_text_file(os.path.join(out_dir, "exec_narrative.md"), exec_text)
 
         except Exception as e:
             kprint(f"[LLM] ERROR: generate_exec_narrative failed: {repr(e)}")
-
-
 
     return result
 
@@ -817,7 +840,7 @@ def run_from_yaml(yaml_path: str) -> Dict[str, Any]:
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        kprint("Usage: python kairos_core.py /path/to/kairos_run.yaml")
+        kprint("Usage: python kairos_core.py /workspaces/Kairos/kairos_run.yaml")
         raise SystemExit(2)
     out = run_from_yaml(sys.argv[1])
     print("\n" + "="*80 + "\n")
